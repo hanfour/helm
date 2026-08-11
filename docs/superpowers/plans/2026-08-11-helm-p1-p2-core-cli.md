@@ -4695,3 +4695,182 @@ git add src/adapters/claude-code/registry.ts src/adapters/claude-code/registry.t
         src/render/table.ts src/render/table.test.ts
 git commit -m "fix: 未知的 registry 狀態值不再讓 session 消失，解析失敗改為可見"
 ```
+
+---
+
+## Task 12: 一個壞 PID 不得汙染整批存活性判定
+
+實驗中發現：`queryProcesses` 把 `ps` 的**任何**失敗都當成「這些 PID 都不存在」，所以單一筆壞資料會讓看板誤報**所有** session 都當機。
+
+**實測**（2026-08-11）：
+
+```
+queryProcesses([活著的 PID])              → 1 筆
+queryProcesses([活著的 PID, 999999])      → 0 筆   ← 應該是 1
+queryProcesses([活著的 PID, 99998])       → 1 筆   （範圍內的死 PID 沒問題）
+
+$ LC_ALL=C ps -o pid=,lstart= -p "$$,999999"
+ps: process id too large: 999999
+exit=1
+```
+
+在假 home 上重現的後果：只改一個 session 的 PID 為 999999，`helm status` 把**三個專案全部**標成「已中斷」。
+
+對照組（同樣手法但 PID 合理）行為都正確，證明 lifecycle 判定本身沒問題：
+
+| 情境 | 結果 |
+|---|---|
+| PID 活著但 `procStart` 對不上 | ✅ 只有該筆 crashed |
+| PID 在範圍內但已死（3999） | ✅ 只有該筆 crashed |
+| PID 超出 `ps` 範圍（999999） | ❌ 全部誤判 crashed |
+
+**根因**在 `processes.ts` 那個 catch 的假設：
+
+```ts
+} catch {
+  // ps exits non-zero when none of the PIDs exist. That is a valid answer.
+  return new Map()
+}
+```
+
+這句話只講對一半。`ps` 回傳非零有兩種完全不同的意思：
+1. **查得到、但都不存在** —— 空 Map 是正確答案
+2. **呼叫本身失敗**（PID 超範圍、參數過長、環境問題）—— 空 Map 是**錯誤**答案，它宣稱「全部都死了」
+
+第二種是誤報。而誤報比漏報更難處理：使用者會去 resume 一個其實正在跑的 session。
+
+**目前不會在使用者機器上觸發**（他的 PID 都是 4–5 位數，遠在範圍內），但「單一筆壞資料汙染全部判定」是設計缺陷，不是邊界情況。session 數量增長時 `-p` 的參數長度也會逼近上限。
+
+**Files:**
+- Modify: `src/adapters/claude-code/processes.ts`, `src/adapters/claude-code/processes.test.ts`
+
+**Interfaces:** 不變 —— `queryProcesses` 的簽章與回傳型別維持 `ProcessProbe`。
+
+- [ ] **Step 1: 寫失敗測試**
+
+追加到 `src/adapters/claude-code/processes.test.ts`：
+
+```ts
+import { queryProcesses } from './processes.ts'
+
+test('一個超出範圍的 PID 不影響同批其他 PID 的查詢結果', () => {
+  const alive = process.pid
+  const got = queryProcesses([alive, 999999])
+  assert.equal(got.has(alive), true, '活著的 PID 必須仍被回報為存活')
+  assert.equal(got.has(999999), false)
+})
+
+test('全部都是無效 PID 時回傳空 Map 而不拋錯', () => {
+  assert.equal(queryProcesses([999998, 999999]).size, 0)
+})
+
+test('超出範圍的 PID 在送給 ps 之前就被濾掉', () => {
+  // 不合理的值不該浪費一次 spawn，也不該讓 ps 印出錯誤到 stderr
+  assert.equal(queryProcesses([0, -1, 999999, 1.5]).size, 0)
+})
+
+test('空清單不 spawn 任何行程', () => {
+  assert.equal(queryProcesses([]).size, 0)
+})
+```
+
+- [ ] **Step 2: 執行測試確認失敗**
+
+Run: `node --test src/adapters/claude-code/processes.test.ts`
+Expected: 第一個測試 FAIL（`got.has(alive)` 為 false），並在輸出看到 `ps: process id too large`。
+
+- [ ] **Step 3: 實作**
+
+兩道防線。第一道是輸入過濾，第二道是批次失敗時退回逐一查詢：
+
+```ts
+/** macOS caps PIDs at 99999; anything outside that makes `ps` reject the whole batch. */
+const MAX_PID = 99_999
+
+function isQueryablePid(pid: number): boolean {
+  return Number.isInteger(pid) && pid > 0 && pid <= MAX_PID
+}
+
+export const queryProcesses: ProcessProbe = (pids) => {
+  const queryable = pids.filter(isQueryablePid)
+  if (queryable.length === 0) return new Map()
+  const batched = runPs(queryable)
+  if (batched !== null) return batched
+
+  // The batch call failed as a whole. That does NOT mean every PID is dead —
+  // `ps` rejects the entire invocation over one bad argument, and treating
+  // that as "all sessions crashed" would show the user a board full of false
+  // red dots. Fall back to asking one at a time so a single bad PID costs
+  // only itself. This path is rare, so the extra spawns are acceptable.
+  return queryable.reduce((acc, pid) => {
+    const one = runPs([pid])
+    const lstart = one?.get(pid)
+    return lstart === undefined ? acc : new Map(acc).set(pid, lstart)
+  }, new Map<number, string>())
+}
+
+/** Returns null when the ps invocation itself failed, empty Map when it ran and found nothing. */
+function runPs(pids: readonly number[]): Map<number, string> | null {
+  try {
+    const out = execFileSync(
+      'ps',
+      ['-o', 'pid=,lstart=', '-p', pids.join(',')],
+      { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' },
+        stdio: ['ignore', 'pipe', 'ignore'] },
+    )
+    return parsePsOutput(out)
+  } catch (err) {
+    // Exit status 1 with output means "ran fine, found none" — a real answer.
+    // Anything else means the call itself failed and we must not conclude
+    // the processes are gone.
+    const stdout = (err as { stdout?: string }).stdout
+    return typeof stdout === 'string' && stdout.trim() !== ''
+      ? parsePsOutput(stdout)
+      : null
+  }
+}
+
+function parsePsOutput(out: string): Map<number, string> {
+  return out.split('\n').reduce((acc, line) => {
+    const m = line.trim().match(/^(\d+)\s+(.+)$/)
+    if (m === null) return acc
+    const pid = Number(m[1])
+    const lstart = (m[2] ?? '').trim()
+    return lstart === '' ? acc : new Map(acc).set(pid, lstart)
+  }, new Map<number, string>())
+}
+```
+
+注意 `stdio` 把 stderr 設為 `'ignore'`，避免 `ps` 的錯誤訊息汙染使用者的終端機輸出 —— 實驗時那行 `ps: process id too large: 999999` 就是這樣漏出來的。
+
+- [ ] **Step 4: 執行測試確認通過**
+
+Run: `node --test src/adapters/claude-code/processes.test.ts`
+Expected: PASS，11 個測試全過（原 7 + 新 4），且輸出中**不再**出現 `ps:` 的錯誤訊息。
+
+- [ ] **Step 5: 端對端驗證誤報已消除**
+
+```bash
+FAKE=$(mktemp -d); mkdir -p "$FAKE/.claude/sessions"
+cp ~/.claude/sessions/*.json "$FAKE/.claude/sessions/" 2>/dev/null
+ln -s ~/.claude/projects "$FAKE/.claude/projects"
+python3 -c "
+import json, glob
+f = sorted(glob.glob('$FAKE/.claude/sessions/*.json'))[0]
+d = json.load(open(f)); d['pid'] = 999999; json.dump(d, open(f,'w'))
+print('已把', d['cwd'], '的 PID 改成 999999')
+"
+HELM_FAKE_HOME="$FAKE" node src/cli/main.ts status --no-color
+rm -rf "$FAKE"
+```
+
+Expected: **只有**被改的那個專案顯示「已中斷」，其餘維持原本狀態；輸出中沒有 `ps:` 錯誤訊息。修正前跑同一段會看到全部都變成已中斷。
+
+- [ ] **Step 6: 全套件與 commit**
+
+Run: `bash scripts/check.sh`
+
+```bash
+git add src/adapters/claude-code/processes.ts src/adapters/claude-code/processes.test.ts
+git commit -m "fix: 一個壞 PID 不再讓整批存活性判定誤報為當機"
+```
