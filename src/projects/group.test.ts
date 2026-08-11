@@ -35,11 +35,16 @@ test('專案名取 cwd 的最後一段', () => {
 })
 
 test('lastActivityMs 取該專案所有 session 的最大值', () => {
+  // 時間一律用 NOW 相對值 —— 裸 epoch 會落在 1970，直接被 14 天窗口濾掉，
+  // 斷言根本跑不到。
+  // 較新的那個刻意放在陣列的第二個位置：這樣「回傳第一個元素」的錯誤實作
+  // 也會被抓到，而不是只抓得到「取最小值」。
   const out = groupIntoProjects(
-    [sess({ sessionId: 'a', updatedAt: NOW - 100 }), sess({ sessionId: 'b', updatedAt: NOW - 900 })],
+    [sess({ sessionId: 'older', updatedAt: NOW - 900_000 }),
+     sess({ sessionId: 'newer', updatedAt: NOW - 100_000 })],
     deps,
   )
-  assert.equal(out[0]?.lastActivityMs, NOW - 100)
+  assert.equal(out[0]?.lastActivityMs, NOW - 100_000)
 })
 
 test('專案排序：pinned 優先，其次依 lastActivityMs 由新到舊', () => {
@@ -77,8 +82,10 @@ test('非 git repo 的專案被排除', () => {
 })
 
 test('專案內的 session 依 updatedAt 由新到舊排序', () => {
+  // 輸入刻意給成「舊的在前」，這樣未排序或反向排序的實作都會被抓到。
   const out = groupIntoProjects(
-    [sess({ sessionId: 'old', updatedAt: NOW - 9 }), sess({ sessionId: 'new', updatedAt: NOW - 1 })],
+    [sess({ sessionId: 'old', updatedAt: NOW - 900_000 }),
+     sess({ sessionId: 'new', updatedAt: NOW - 100_000 })],
     deps,
   )
   assert.deepEqual(out[0]?.sessions.map((s) => s.sessionId), ['new', 'old'])
