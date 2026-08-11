@@ -2,10 +2,18 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, wri
 import { dirname, join } from 'node:path'
 import type { HelmPaths } from '../paths.ts'
 import { addHelmHook, hasHelmHook, removeHelmHook } from './settings.ts'
-import { buildHookCommand } from './snippet.ts'
+import { buildHookCommand, HOOK_MARKER, shellQuote } from './snippet.ts'
 
 const SWIFTBAR_APP = '/Applications/SwiftBar.app'
 const PLUGIN_NAME = 'helm.5s.sh'
+
+/**
+ * Written into every script helm generates, so uninstall can tell its own
+ * files apart from anything that happened to be sitting at the same path.
+ * `helm` is also the name of the Kubernetes client, and ~/.local/bin is
+ * exactly where a user keeps their own binaries.
+ */
+const SCRIPT_MARKER = `# ${HOOK_MARKER}`
 
 export interface InstallDeps {
   now: () => number
@@ -62,16 +70,23 @@ export function installHook(paths: HelmPaths, deps: InstallDeps): InstallReport 
   writeJsonAtomic(paths.claudeSettings, updated)
   steps.push(`已把 hook 加進 ${paths.claudeSettings}（其餘設定未動）`)
 
+  const entry = shellQuote(join(deps.repoRoot, 'src/cli/main.ts'))
   const wrapper = wrapperPath(paths)
-  writeExecutable(wrapper, `#!/bin/sh\nexec node "${join(deps.repoRoot, 'src/cli/main.ts')}" "$@"\n`)
-  steps.push(`已安裝 ${wrapper}`)
+  const wrapperOk = writeOurScript(wrapper, `#!/bin/sh\nexec node ${entry} "$@"\n`)
+  if (wrapperOk) steps.push(`已安裝 ${wrapper}`)
+  else warnings.push(`${wrapper} 已經存在且不是 helm 寫的（Kubernetes 的 helm 也叫這個名字），未覆寫。想用 helm 指令請自行改名或換一個位置。`)
 
   if (deps.swiftbarInstalled ?? existsSync(SWIFTBAR_APP)) {
     const plugin = join(swiftbarPluginDir(paths), PLUGIN_NAME)
     // Absolute path: SwiftBar runs plugins with a minimal PATH that will not
-    // contain ~/.local/bin.
-    writeExecutable(plugin, `#!/bin/sh\nexec "${wrapper}" menu\n`)
-    steps.push(`已安裝 SwiftBar plugin：${plugin}`)
+    // contain ~/.local/bin. Falls back to the entry point directly when the
+    // wrapper is somebody else's file.
+    const invoke = wrapperOk ? `${shellQuote(wrapper)} menu` : `node ${entry} menu`
+    if (writeOurScript(plugin, `#!/bin/sh\nexec ${invoke}\n`)) {
+      steps.push(`已安裝 SwiftBar plugin：${plugin}`)
+    } else {
+      warnings.push(`${plugin} 已經存在且不是 helm 寫的，未覆寫。`)
+    }
   } else {
     warnings.push('找不到 SwiftBar，選單列看板尚未啟用。安裝方式：brew install --cask swiftbar，裝好後重跑 helm install。')
   }
@@ -97,7 +112,7 @@ export function uninstallHook(paths: HelmPaths, deps: InstallDeps): InstallRepor
   }
 
   for (const path of [wrapperPath(paths), join(swiftbarPluginDir(paths), PLUGIN_NAME)]) {
-    if (!existsSync(path)) continue
+    if (!isOurScript(path)) continue
     rmSync(path, { force: true })
     steps.push(`已移除 ${path}`)
   }
@@ -121,10 +136,22 @@ function onPath(dir: string): boolean {
   return (process.env['PATH'] ?? '').split(':').includes(dir)
 }
 
-function writeExecutable(path: string, body: string): void {
+/** Returns false when something helm did not write already occupies the path. */
+function writeOurScript(path: string, body: string): boolean {
+  if (existsSync(path) && !isOurScript(path)) return false
   mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(path, body, 'utf8')
+  writeFileSync(path, `${body}${SCRIPT_MARKER}\n`, 'utf8')
   chmodSync(path, 0o755)
+  return true
+}
+
+function isOurScript(path: string): boolean {
+  try {
+    return readFileSync(path, 'utf8').includes(SCRIPT_MARKER)
+  } catch {
+    // Missing or unreadable: either way it is not a file helm may delete.
+    return false
+  }
 }
 
 /** Distinct from `{}` so the caller can refuse rather than clobber. */

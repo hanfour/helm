@@ -4,7 +4,7 @@ import {
   existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { resolvePaths } from '../paths.ts'
 import { installHook, uninstallHook } from './install.ts'
 import { hasHelmHook } from './settings.ts'
@@ -50,7 +50,7 @@ test('安裝會寫出可執行的 helm wrapper', () => {
   const h = home({})
   installHook(resolvePaths({ home: h }), DEPS)
   const wrapper = join(h, '.local', 'bin', 'helm')
-  assert.match(readFileSync(wrapper, 'utf8'), /exec node "\/repo\/src\/cli\/main\.ts" "\$@"/)
+  assert.match(readFileSync(wrapper, 'utf8'), /exec node '\/repo\/src\/cli\/main\.ts' "\$@"/)
   assert.ok((statSync(wrapper).mode & 0o111) !== 0, 'wrapper 必須可執行')
 })
 
@@ -89,7 +89,7 @@ test('SwiftBar 有裝時一併安裝可執行的 plugin', () => {
   const h = home({})
   installHook(resolvePaths({ home: h }), { ...DEPS, swiftbarInstalled: true })
   const plugin = join(h, 'Library', 'Application Support', 'SwiftBar', 'helm.5s.sh')
-  assert.match(readFileSync(plugin, 'utf8'), /helm" menu/)
+  assert.match(readFileSync(plugin, 'utf8'), /helm' menu/)
   assert.ok((statSync(plugin).mode & 0o111) !== 0)
 })
 
@@ -162,4 +162,69 @@ test('安裝是原子的 —— 不留半份 settings.json 也不留暫存檔', 
   installHook(resolvePaths({ home: h }), DEPS)
   const leftovers = readdirSync(join(h, '.claude')).filter((n) => n.includes('.tmp'))
   assert.deepEqual(leftovers, [])
+})
+
+test('既有的同名 helm（例如 Kubernetes 的）不會被覆寫', () => {
+  // ~/.local/bin 正是使用者放自己二進位檔的地方，而 Kubernetes 的 helm 同名。
+  // 覆寫它、又在 uninstall 時刪掉，會讓使用者永久失去一個我們沒寫的檔案。
+  const h = home({})
+  const wrapper = join(h, '.local', 'bin', 'helm')
+  mkdirSync(dirname(wrapper), { recursive: true })
+  writeFileSync(wrapper, '#!/bin/sh\necho "Kubernetes Helm v3.16.2"\n')
+  const report = installHook(resolvePaths({ home: h }), DEPS)
+  assert.match(readFileSync(wrapper, 'utf8'), /Kubernetes Helm/)
+  assert.ok(report.warnings.some((w) => w.includes(wrapper)))
+})
+
+test('別人的 helm 存在時仍完成 hook 安裝，不是整個放棄', () => {
+  const h = home({})
+  const wrapper = join(h, '.local', 'bin', 'helm')
+  mkdirSync(dirname(wrapper), { recursive: true })
+  writeFileSync(wrapper, '#!/bin/sh\necho other\n')
+  installHook(resolvePaths({ home: h }), DEPS)
+  assert.equal(hasHelmHook(readSettings(h)), true)
+})
+
+test('別人的 helm 存在時，SwiftBar plugin 改為直接呼叫 node，不依賴 wrapper', () => {
+  const h = home({})
+  const wrapper = join(h, '.local', 'bin', 'helm')
+  mkdirSync(dirname(wrapper), { recursive: true })
+  writeFileSync(wrapper, '#!/bin/sh\necho other\n')
+  installHook(resolvePaths({ home: h }), { ...DEPS, swiftbarInstalled: true })
+  const plugin = readFileSync(
+    join(h, 'Library', 'Application Support', 'SwiftBar', 'helm.5s.sh'), 'utf8',
+  )
+  assert.ok(!plugin.includes(wrapper), '不該指向別人的 helm')
+  assert.match(plugin, /main\.ts' menu/)
+})
+
+test('uninstall 只刪自己寫的 wrapper', () => {
+  const h = home({})
+  const wrapper = join(h, '.local', 'bin', 'helm')
+  mkdirSync(dirname(wrapper), { recursive: true })
+  writeFileSync(wrapper, '#!/bin/sh\necho "Kubernetes Helm v3.16.2"\n')
+  const paths = resolvePaths({ home: h })
+  installHook(paths, DEPS)
+  uninstallHook(paths, DEPS)
+  assert.equal(existsSync(wrapper), true, '不是我們寫的就不該刪')
+  assert.match(readFileSync(wrapper, 'utf8'), /Kubernetes Helm/)
+})
+
+test('uninstall 刪得掉自己寫的 wrapper', () => {
+  const h = home({})
+  const paths = resolvePaths({ home: h })
+  installHook(paths, DEPS)
+  const wrapper = join(h, '.local', 'bin', 'helm')
+  assert.equal(existsSync(wrapper), true)
+  uninstallHook(paths, DEPS)
+  assert.equal(existsSync(wrapper), false)
+})
+
+test('uninstall 不刪別人的 SwiftBar plugin', () => {
+  const h = home({})
+  const plugin = join(h, 'Library', 'Application Support', 'SwiftBar', 'helm.5s.sh')
+  mkdirSync(dirname(plugin), { recursive: true })
+  writeFileSync(plugin, '#!/bin/sh\necho someone elses\n')
+  uninstallHook(resolvePaths({ home: h }), DEPS)
+  assert.match(readFileSync(plugin, 'utf8'), /someone elses/)
 })
