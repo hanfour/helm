@@ -4874,3 +4874,65 @@ Run: `bash scripts/check.sh`
 git add src/adapters/claude-code/processes.ts src/adapters/claude-code/processes.test.ts
 git commit -m "fix: 一個壞 PID 不再讓整批存活性判定誤報為當機"
 ```
+
+---
+
+## Task 13: 探索改以 transcript 為主 —— 目前看不到已結束的 session（最高優先）
+
+**這個缺陷讓產品無法滿足原始需求的一半。** 使用者要的是「重新開機**或**突然當機之後能接續」，目前只涵蓋後者。
+
+**實測證據**（2026-08-11）：
+
+```
+註冊表 ~/.claude/sessions/*.json      6 筆
+磁碟上的 transcript                2846 份
+近 3 天有活動但不在註冊表裡          30 份
+```
+
+具體案例：`project-alpha` 的 session `19519d4f` 剛結束，transcript 8.6 MB 完整保留，但
+
+```
+$ helm status | grep project-alpha      → 看不到
+$ helm brief 19519d4f                      → 找不到符合 "19519d4f" 的 session
+```
+
+**根因**：`discoverClaudeCode` 只列舉註冊表。而 §4.1 已實測確立「Claude Code 正常結束時會刪除註冊表檔」—— 正常重開機時所有 session 都收到 SIGTERM 正常結束，於是**註冊表全空，看板一片空白**。當機時檔案殘留才看得到紅點。
+
+換句話說，helm 現在只在「非正常結束」時有用，而使用者明確要求兩種都要。
+
+**設計調整**：探索的主要來源改為 transcript，註冊表降為存活性的補充資訊。
+
+- **transcript 是持久事實**：session 存在過、在哪個 cwd、最後活動時間
+- **註冊表是當下狀態**：還活著嗎、busy 還是 idle、PID 與 procStart
+
+兩者以 `sessionId` join。註冊表有的，補上存活性；註冊表沒有的，就是已結束或當機的歷史 session。
+
+**效能實測**（同一台機器）：靠目錄 mtime 先篩掉整個沒動過的專案，2846 份檔案只需要 stat 424 份。
+
+```
+目錄數 27 → 需 stat 424 檔 → 近 14 天有活動 158 個 → 耗時 8.2 ms
+```
+
+效能契約是 200ms，餘裕充足。**不得讀取 transcript 內容，只 stat**。
+
+**一併要解決的顯示問題**：近 14 天有 158 個 session，全列出來看板會爆炸。需要每個專案的 session 數上限（建議預設 3，`--all` 顯示全部），優先保留 `crashed` 與 `running`，其餘按最後活動時間取最近的。
+
+**Lifecycle 判定的影響**：§6 的真值表第 4、5 列本來就涵蓋「註冊表不存在」的情況，靠 live 檔與 transcript 時間戳判斷。但 P3 的 hook 尚未實作，所以現階段所有註冊表外的 session 都會落到「無 live 檔 → `ended_clean`」那一列，顯示為灰點。這是誠實的：沒有 hook 就沒有證據區分「正常結束」與「當機」，不該猜。P3 完成後這些會自動獲得正確判定。
+
+**Files:**
+- Modify: `src/adapters/claude-code/discover.ts` 與其測試
+- Modify: `src/render/table.ts` 與其測試（session 數上限）
+- Modify: `src/cli/status.ts`、`src/cli/main.ts`（`--all` 旗標）
+
+**Interfaces:**
+- 新增 `interface DiscoverOptions { windowDays: number; nowMs: number }`
+- `discoverClaudeCode(paths: HelmPaths, opts: DiscoverOptions): DiscoverResult`
+- `renderTable` 的 `RenderOptions` 新增 `maxSessionsPerProject: number | null`（null 表示不限）
+
+**驗收（這是本 task 的重點，不可略過）**：
+
+1. `helm status` 必須列出 `project-alpha` 的 `19519d4f`，即使它不在註冊表
+2. `helm brief 19519d4f` 必須找得到並產生簡報
+3. 仍在註冊表裡的 session 必須保留正確的 busy/idle 與紅點判定 —— 不可因為改用 transcript 探索而退化
+4. `helm status` 的執行時間必須仍在 200ms 內（用 `time` 量測並貼進報告）
+5. 看板不得因為 158 個 session 而變得無法閱讀
