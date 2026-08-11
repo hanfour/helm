@@ -3,6 +3,7 @@
 **日期**：2026-08-11
 **狀態**：設計已核可，待實作計畫
 **代號**：`helm`（掌舵 —— 同時駕馭多艘船）
+**架構**：掃描式（scan-based）。無 daemon、無資料庫、單一 hook。
 
 ---
 
@@ -20,7 +21,9 @@
 | 沒有跨專案優先順序視野 | 8 個 session 分散在 8 個終端機分頁，無彙總視圖 |
 | 遠端 PR 審查狀態不明 | 無法得知哪張 PR 在等自己修改 |
 
-**核心洞察**：Claude Code 原生的 session 標題機制對長壽 session 完全無效，這是「找不到 session」的根因。真正的語意訊號在純文字 user prompt —— 7679 行 transcript 中只有 224 筆，低頻但高濃度（例：「目前狀況？」「繼續跑最終 review」）。
+**核心洞察一**：Claude Code 原生的 session 標題機制對長壽 session 完全無效，這是「找不到 session」的根因。真正的語意訊號在純文字 user prompt —— 7679 行 transcript 中只有 224 筆，低頻但高濃度（例：「目前狀況？」「繼續跑最終 review」）。
+
+**核心洞察二**：這個系統需要的資料，**幾乎全部已經在磁碟上**。Claude Code 與 Codex 都持續寫出結構化的 session 狀態與完整 transcript。因此本設計不建立自己的資料管線，改為直接讀取既有檔案，僅在單一無法從檔案取得的資訊上使用 hook（見 §4.3）。
 
 ## 2. 目標與非目標
 
@@ -36,107 +39,73 @@
 ### 非目標
 
 - 不做遠端／跨機器同步（純本機）
-- 不做 Gemini CLI / Copilot CLI 的實作（僅保留 adapter 介面，見 §5.3）
+- 不做 Gemini CLI / Copilot CLI 的實作（僅保留 adapter 介面，見 §5.4）
 - 不在看板內直接執行 agent 任務（看板負責追蹤與交接，不負責代跑）
-- 不整合既有的 `project-alpha`（`helm` 為全新獨立專案，決策見 §3.3）
+- 不整合既有的 `project-alpha`（`helm` 為全新獨立專案，決策見 §3.4）
+- **不建立事件歷史資料庫** —— transcript 即是歷史（決策見 §3.3）
 
 ## 3. 架構
 
-### 3.1 元件與依賴方向
-
-依賴嚴格單向，無循環：
+### 3.1 形狀
 
 ```
-[agent CLI] ──hook──> collector ──append──> spool 檔
-                                              │
-                                       daemon 批次 ingest
-                                              ↓
-   reconciler / summarizer / remote ──read/write──> store (SQLite)
-                                              ↑
-                                          daemon (127.0.0.1)
-                                              │
-                          ┌───────────────────┼───────────────────┐
-                     ui-menubar             ui-web                cli
-                       (Swift)               (web)          (helm status)
+      既有檔案（不由 helm 產生）
+      ├── ~/.claude/sessions/<PID>.json      活躍註冊表
+      ├── ~/.claude/projects/*/*.jsonl       transcript
+      ├── ~/.codex/history.jsonl             prompt 歷史
+      └── ~/.codex/sessions/**/rollout-*.jsonl
+                    │
+      PreToolUse hook ──覆寫──> ~/.helm/live/<session_id>.json   （單行，見 §4.3）
+                    │
+                    ↓
+          helm CLI（無常駐行程）
+          ├── scan    讀上述檔案 → 統一模型
+          ├── menu    輸出 SwiftBar 格式（純快取路徑，毫秒級）
+          ├── brief   產生交接簡報
+          ├── open    開終端機 resume
+          └── doctor  健檢
+                    │
+                    ├──> ~/.helm/cache.json    （可隨時刪除重建）
+                    │
+                    └──> SwiftBar plugin `helm.5s.sh`  →  選單列
 ```
+
+沒有 daemon。沒有 HTTP。沒有資料庫。沒有 migration。
+
+### 3.2 元件
 
 | 單元 | 唯一職責 | 依賴 |
 |---|---|---|
-| `collector` | hook 事件 → append 到 spool 檔 | 檔案系統 |
-| `store` | SQLite 讀寫、schema migration | 無 |
-| `adapters` | 各 CLI 的狀態來源 → 統一 `AgentSession` | store |
-| `reconciler` | 判定 session lifecycle（running / ended_clean / crashed） | store, `ps` |
-| `summarizer` | 事件 + transcript → 結構化交接簡報 | store, `claude -p` |
-| `remote` | `gh` 輪詢 PR 與 review 狀態 | store, `gh` |
-| `launcher` | 開終端機 + `cd` + resume + 注入簡報 | store, `osascript` |
-| `daemon` | 批次 ingest、排程、本機 HTTP API | 上述全部 |
-| `cli` | `helm status` / `open` / `doctor` / `install` | daemon（可 fallback 直讀 store） |
-| `ui-menubar` | 狀態圓點、下拉快覽、一鍵開 | daemon HTTP |
-| `ui-web` | 交接簡報、工具呼叫時間軸、diff、PR 詳情 | daemon HTTP |
+| `adapters` | 各 CLI 的既有檔案 → 統一 `AgentSession` | 檔案系統 |
+| `reconcile` | 判定 session lifecycle（running / ended_clean / crashed） | adapters, `ps` |
+| `cache` | 讀寫 `~/.helm/cache.json`，含 stale-while-revalidate | 檔案系統 |
+| `summarize` | 事件 + transcript → 結構化交接簡報 | adapters, `claude -p` |
+| `remote` | `gh` 查詢 PR 與 review 狀態 | `gh` |
+| `launch` | 組出終端機指令 + 注入簡報 | adapters, `osascript` |
+| `render` | 統一模型 → SwiftBar 格式／終端機表格／markdown | 無 |
+| `cli` | 指令進入點與旗標解析 | 上述全部 |
+| `hook` | `PreToolUse` 的單行覆寫寫入 + 安裝器 | 檔案系統 |
 
-### 3.2 三個不變量
+`render` 不依賴任何 I/O，是純函式 —— 這讓所有輸出格式都能完整單元測試。
 
-整個系統的可靠性建立在這三條上，任何實作不得違反：
+### 3.3 為什麼不要資料庫
 
-**I1. `collector` 不依賴 `daemon`。**
-看板未開、選單列 app 未裝、daemon 崩潰 —— 事件照樣落地到 spool 檔。這是「當機也不丟」的地基。
+原設計包含 hook spool → 批次 ingest → SQLite（events / handoffs / quarantine 表）+ daemon。捨棄的理由：
 
-**I2. `collector` 絕不阻塞 agent CLI。**
-它跑在每次工具呼叫的關鍵路徑上。實作限制為單次 `sh -c` + shell builtin 寫檔（見 §4.2 實測）。任何錯誤靜默吞掉並寫入 `~/.helm/collector-errors.log`。
+1. **八成的採集是在複製已存在的資料。** transcript 已含完整的 1451 筆 `tool_use`（Bash 811 次，含完整指令字串與 `tool_result`）、全部 user prompt、`cwd`、`gitBranch`、時間戳
+2. **歷史保存不急。** 使用者設定 `cleanupPeriodDays: 100`，transcript 保留 100 天
+3. **資料庫帶來的成本是真實的**：schema migration、格式異常隔離、ingest 排程、daemon 生命週期管理、以及一個必須常駐的行程
+4. **可逆。** CLI 介面不變，日後若真需要事件歷史，加一層儲存不需重寫任何上層
 
-**I3. `events` 表 append-only。**
-`sessions.lifecycle` 等現況欄位是從事件推導出的投影，可隨時重建。這讓 schema 演進與除錯都安全。
+唯一無法從既有檔案取得的資訊是「此刻正在執行哪個工具呼叫」（見 §4.3 的實測依據），該項以單一 hook 解決，不需要資料庫。
 
-### 3.3 為什麼不整合 project-alpha
+### 3.4 為什麼不整合 project-alpha
 
-使用者已有 `project-alpha` v3.2.0（42 CLI 指令、6 agent、9 MCP tool、PKB 快取），具備 repo 掃描與 PR review 能力。選擇不整合的理由：`helm` 的核心價值在「當機恢復」，其引擎必須能獨立跑、獨立測、獨立被 CLI 呼叫，不應綁定在一個已經很大的專案的生命週期上。`helm` 只依賴 `~/.claude/`、`~/.codex/`、`git`、`gh`。
+使用者已有 `project-alpha` v3.2.0（42 CLI 指令、6 agent、9 MCP tool、PKB 快取）。選擇不整合的理由：`helm` 的核心價值在「當機恢復」，其引擎必須能獨立跑、獨立測、獨立被 CLI 呼叫，不應綁定在一個已經很大的專案的生命週期上。`helm` 只依賴 `~/.claude/`、`~/.codex/`、`git`、`gh`。
 
-## 4. 採集機制
+## 4. 資料來源
 
-### 4.1 三個來源，職責不重疊
-
-| 來源 | 提供 | 成本 | 弱點 |
-|---|---|---|---|
-| 原生註冊表 | 誰活著、cwd、busy/idle、heartbeat、`procStart` | 零（讀既有檔） | 無語意 |
-| Hook spool | 在做什麼、每次工具呼叫、每輪 heartbeat | 5.65ms/次 | 當機漏最後一筆 |
-| Transcript | 完整真相（含 `tool_result`） | 高 | 僅 lazy 讀 |
-
-任一來源失效，系統仍可降級運作。
-
-### 4.2 Hook 設定
-
-接收以下事件（含 `PreToolUse`，決策依據見下方實測）：
-
-| Hook | Matcher | 記錄內容 |
-|---|---|---|
-| `SessionStart` | — | 建 session 列、source（startup/resume/clear）、cwd、PID |
-| `UserPromptSubmit` | — | 使用者原話（最高語意密度） |
-| `PreToolUse` | 全部 | 工具名、輸入摘要、時間（提供「此刻正在跑什麼」的即時性） |
-| `PostToolUse` | `Edit\|Write\|NotebookEdit` | 碰過的檔案路徑 |
-| `Stop` | — | 每輪結束 heartbeat + turn 計數 |
-| `SessionEnd` | — | 正常結束標記 + reason |
-
-**Hook 實作**：單一 `sh -c` 指令，使用 shell builtin `read` + `printf` 附加到 spool，**不 spawn 第二個行程、不啟動 Node**。
-
-實測（本機 200 次穩態，2026-08-11）：
-
-| 做法 | 每次成本 |
-|---|---|
-| script 檔 + `cat`（2 次 spawn） | 8.8ms |
-| **`sh -c` + builtin `read`/`printf`（1 次 spawn）** | **5.65ms** |
-| 純 spawn 下限 `sh -c true` | 5.52ms |
-
-寫入本身僅佔 0.13ms，其餘為 macOS 行程 spawn 的不可壓下限。`PreToolUse` 的實際代價：以該 session 的 1451 次 `tool_use` 計，累積 8.2 秒攤在 5 天內；每 turn 約 15 次工具呼叫即 **85ms/turn**。可接受。
-
-**Spool 位置**：`~/.helm/spool/<session_id>.jsonl`。
-
-**Ingest 時機**：daemon 啟動時全量 ingest 一次，之後每 5 秒批次處理有變動的 spool 檔（以 mtime 判斷），並記錄各檔已處理的 byte offset 以支援增量續讀。ingest 完成後不刪除 spool 檔，改於超過 7 天且對應 session 已 `ended_clean` 時歸檔至 `~/.helm/spool/archive/`。**daemon 未執行時 spool 持續累積，不遺失** —— 這是不變量 I1 的具體體現。
-
-**安裝方式**：往 `~/.claude/settings.json` 的 `hooks` 附加，**不覆蓋**。安裝前備份至 `~/.helm/backups/settings-<timestamp>.json`。使用者現有 hook 由 `everything-claude-code` plugin 提供，安裝程序須與之共存。
-
-**Kill switch**：環境變數 `HELM_OFF=1` 讓 collector 整個 no-op，無需改設定檔即可脫身。
-
-### 4.3 Claude Code 原生註冊表
+### 4.1 Claude Code 原生註冊表
 
 `~/.claude/sessions/<PID>.json`，實測 schema：
 
@@ -158,9 +127,13 @@
 }
 ```
 
-`kind` 可為 `interactive` 或 `bg`。`status` 為 `busy` / `idle`，由 Claude Code 自行維護。
+`kind` 為 `interactive` 或 `bg`。**`status` 為 `busy` / `idle`，由 Claude Code 自行維護** —— 這直接回答了「哪個專案正在跑、哪個在等我輸入」，無需任何採集。
 
-### 4.4 Transcript
+**實測確立的關鍵行為**（2026-08-11，以 headless session 驗證）：session 啟動時建立此檔，**正常結束時刪除此檔**。因此「檔案殘留 + PID 已死」即為當機的直接證據，不需要 `SessionEnd` hook 來標記正常結束。
+
+此為**快速路徑**的主要資料源：檔案小、數量少（當下 8 個），可在每次選單列刷新時全量讀取。
+
+### 4.2 Transcript
 
 `~/.claude/projects/<slug>/<session_id>.jsonl`。實測 type 分布（7679 行樣本）：
 
@@ -170,9 +143,70 @@ permission-mode 488 / ai-title 487 / system 383 / attachment 300 /
 queue-operation 246 / file-history-snapshot 120 / file-history-delta 26
 ```
 
-`user` 記錄含 `timestamp`、`cwd`、`gitBranch`、`sessionId`、`version`、`slug`。純文字 prompt（`message.content` 為字串，或 list 中的 `text` block）僅 224 筆。`assistant` 記錄的 `content` 中 `tool_use` block 共 1451 筆，含完整 Bash 指令字串。
+`user` 記錄含 `timestamp`、`cwd`、`gitBranch`、`sessionId`、`version`、`slug`。純文字 prompt 僅 224 筆。`assistant` 記錄中的 `tool_use` block 共 1451 筆，含完整 Bash 指令字串。
 
-**僅 lazy 讀**：只在產生交接簡報或展開工具呼叫時間軸時讀取，並記錄 byte offset 供增量續讀。
+**僅慢速路徑讀取**：只在產生交接簡報、展開工具呼叫時間軸時讀，並以 byte offset 支援增量續讀。選單列刷新**絕不**掃 transcript。
+
+**實測確立**：transcript **不含任何 session 結束標記** —— 已結束 session 的檔案末尾就只是一筆普通的 `assistant` 記錄。因此 lifecycle 判定不得依賴 transcript 內容，只能依賴 §4.1 的註冊表行為與 §4.3 的 live 檔（見 §6）。
+
+### 4.3 PreToolUse hook — 唯一的採集
+
+**必要性依據**（2026-08-11 實測）：在一個工具執行的當下，回頭檢查自己的 transcript，找不到本次呼叫的 `tool_use` 記錄。**`tool_use` 是在工具執行完畢後才寫入 transcript**。因此「此刻正卡在哪個指令」是唯一無法從既有檔案取得的資訊。
+
+**覆寫式單行設計**：
+
+```
+~/.helm/live/<session_id>.json     # 永遠只有一行，每次 PreToolUse 覆寫
+```
+
+因為只需要「此刻」而不需要歷史（歷史 transcript 有），hook 使用 `>` 覆寫而非 `>>` 附加。由此得到三個性質：
+
+- 檔案永不成長，**無需清理、無需歸檔、無需 ingest**
+- 讀取只需讀一行
+- 沒有任何批次處理，因此不需要 daemon
+
+**hook 實作**：單一 `sh -c` 指令，使用 shell builtin `read` + `printf` 寫入，**不 spawn 第二個行程、不啟動 Node**。
+
+實測（本機 200 次穩態）：
+
+| 做法 | 每次成本 |
+|---|---|
+| script 檔 + `cat`（2 次 spawn） | 8.8ms |
+| **`sh -c` + builtin `read`/`printf`（1 次 spawn）** | **5.65ms** |
+| 純 spawn 下限 `sh -c true` | 5.52ms |
+
+寫入本身僅佔 0.13ms，其餘為 macOS 行程 spawn 的不可壓下限。實際代價約 **85ms/turn**（以每 turn 15 次工具呼叫計）。
+
+**過時判定**：`live/<id>.json` 中的記錄，在對應 session 的註冊表 `status` 為 `idle` 時視為過時並忽略。無需 `PostToolUse` hook，因此不付第二次 spawn 成本。
+
+**第二個用途：不會被上游抹除的當機證據。** `~/.claude/sessions/<PID>.json` 由 Claude Code 管理，可能在其啟動時被清理，導致當機證據消失。`~/.helm/live/*.json` 由 helm 自己管理，上游不會動它。因此當註冊表已無某 session、但其 live 檔的時間戳晚於該 session transcript 的最後一筆記錄時，即可判定「當機於某個工具呼叫執行中」，並直接得知當時卡在哪個指令。此判定納入 §6。
+
+**清理**：`live/*.json` 在對應 session 判定為 `ended_clean`、或檔案超過 30 天時，由 `helm doctor` 或任一次 `helm scan` 順手刪除。單一 session 僅一個檔且永不成長，因此清理非關鍵路徑。
+
+**安裝方式**：往 `~/.claude/settings.json` 的 `hooks` 附加，**不覆蓋**。安裝前備份至 `~/.helm/backups/settings-<timestamp>.json`。使用者現有 hook 由 `everything-claude-code` plugin 提供，安裝程序須與之共存。
+
+**Kill switch**：環境變數 `HELM_OFF=1` 讓 hook 整個 no-op。錯誤一律靜默（它跑在關鍵路徑上），但寫入 `~/.helm/hook-errors.log`，由 `helm doctor` 主動回報。這是本專案「絕不靜默吞錯」原則的唯一豁免，且附帶此補償。
+
+**解除安裝**：`helm uninstall` 移除 hook 設定並還原備份。使用者必須能在 30 秒內完全脫身。
+
+### 4.4 快取
+
+`~/.helm/cache.json`，單一檔案，**可隨時刪除重建**。內容：
+
+```jsonc
+{
+  "version": 1,
+  "briefs":  { "<session_id>": { "digest": "<size>:<mtime>", "generatedAt": 0, "body": {} } },
+  "prs":     { "<repo>": { "fetchedAt": 0, "items": [] } },
+  "projects":{ "<path>":  { "name": "", "gitRemote": "" } }
+}
+```
+
+`briefs.digest` 為 transcript 的「byte size + mtime」。不符即視為 stale。這是控制 token 花費的唯一機制。
+
+**Stale-while-revalidate**：`helm menu` 偵測到某項快取過期時，**fork 一個背景行程去更新，自己立即回傳既有值**。下一次刷新（5 秒後）即為新值。這是無 daemon 也能有背景更新的關鍵，也是選單列不會因為等 `gh` 或 `claude -p` 而卡住的原因。
+
+**單一真實來源**：`cache.json` 中所有內容皆為可重建的衍生資料。使用者意圖（`pinned` / `hidden`）不存於此，而是獨立存放於 `~/.helm/projects.json` —— 該檔是使用者設定的唯一真實來源，永不自動刪除。`cache.json` 的 `projects` 區塊僅快取衍生欄位（`name`、`gitRemote`）。刪除 `cache.json` 不會遺失任何使用者意圖。
 
 ## 5. Adapter 層
 
@@ -183,26 +217,28 @@ queue-operation 246 / file-history-snapshot 120 / file-history-delta 26
 ```ts
 interface AgentAdapter {
   readonly id: 'claude-code' | 'codex' | string
-  discoverSessions(): Promise<DiscoveredSession[]>   // 存活性 + 基本資訊
-  readSemantics(s: DiscoveredSession, since?: Cursor): Promise<SemanticEvent[]>
+  discoverSessions(): Promise<DiscoveredSession[]>          // 快速路徑，不讀 transcript
+  readSemantics(s: DiscoveredSession, since?: Cursor): Promise<SemanticEvent[]>  // 慢速路徑
   buildResumeCommand(s: DiscoveredSession, briefPath: string): ResumeCommand
 }
 ```
 
+`discoverSessions` 有效能契約：**不得讀取 transcript，不得發網路請求**。選單列每 5 秒呼叫它。
+
 ### 5.2 Claude Code adapter
 
-- 存活性：`~/.claude/sessions/*.json` + `ps` 驗證
-- 語意：hook spool（即時）+ transcript（回填與 `tool_result`）
+- 快速路徑：`~/.claude/sessions/*.json` + `ps` 驗證 + `~/.helm/live/*.json`
+- 慢速路徑：transcript（§4.2）
 - Resume：`claude --resume <session_id>`
 
 ### 5.3 Codex adapter
 
-**零侵入**（Codex 無 hook 機制，也不需要）：
+**零 hook**（Codex 無 hook 機制，也不需要）：
 
 - 語意：`~/.codex/history.jsonl`，每行 `{"session_id": "...", "ts": 1786003633, "text": "找出損耗我們 SSD 的對象"}` —— 現成的純使用者 prompt 歷史，等同 Claude Code 的 `UserPromptSubmit` 但成本為零
 - 詳情：`~/.codex/sessions/YYYY/MM/DD/rollout-<ISO>-<uuid>.jsonl`（實測 192 個檔）。首行 `type: "session_meta"`，payload 含 `session_id`、`cwd`、`originator`、`cli_version`、`model_provider`。後續為 `event_msg`（含 `task_started` 與 `turn_id`）與 `response_item`
-- 補充：`~/.codex/state_5.sqlite` 有 `threads`、`thread_spawn_edges` 等表（唯讀存取，不寫入）
-- 存活性：**無 PID 註冊表** —— 掃 `ps` 找 `codex` 行程並比對 cwd。此為已知的較弱環節，因此 Codex session 的 `crashed` 判定信心度標為 `low`，UI 需區分呈現
+- 補充：`~/.codex/state_5.sqlite` 有 `threads`、`thread_spawn_edges` 等表（**唯讀**存取，絕不寫入）
+- 存活性：**無 PID 註冊表** —— 掃 `ps` 找 `codex` 行程並比對 cwd
 - Resume：`codex resume <session_id>`
 
 ### 5.4 未實作的 adapter
@@ -212,75 +248,41 @@ interface AgentAdapter {
 
 兩者保留介面不實作。日後接入只需新增一個 adapter 檔。
 
-## 6. 資料模型
+## 6. Lifecycle 判定
 
-SQLite，位於 `~/.helm/helm.db`。
+`reconcile` 為純函式，可完整單元測試。
 
-```sql
-projects(
-  id INTEGER PK, path TEXT UNIQUE, name TEXT, git_remote TEXT,
-  pinned INTEGER DEFAULT 0, hidden INTEGER DEFAULT 0, first_seen_at INTEGER)
+**Claude Code**（依 §4.1 與 §4.2 的實測行為推導）：
 
-sessions(
-  id TEXT PK,                    -- CLI 原生 session id
-  adapter_id TEXT,               -- 'claude-code' | 'codex'
-  project_id INTEGER,
-  pid INTEGER, proc_start TEXT,  -- proc_start 用於偵測 PID 重用
-  transcript_path TEXT, kind TEXT,
-  started_at INTEGER, last_seen_at INTEGER,
-  native_status TEXT,            -- 'busy' | 'idle' | NULL
-  lifecycle TEXT,                -- 'running' | 'ended_clean' | 'crashed'
-  lifecycle_confidence TEXT,     -- 'high' | 'low'
-  ended_reason TEXT)
+| 註冊表檔 | PID | `procStart` 比對 | live 檔 | → lifecycle |
+|---|---|---|---|---|
+| 存在 | 活著 | 相符 | — | `running` |
+| 存在 | 死亡 | — | — | `crashed` —— 來不及刪檔 |
+| 存在 | 活著 | **不符** | — | `crashed` —— PID 已被重用 |
+| 不存在 | — | — | 存在且時間戳晚於 transcript 末筆 | `crashed` —— 當機於工具執行中 |
+| 不存在 | — | — | 無，或早於 transcript 末筆 | `ended_clean` |
 
-events(
-  id INTEGER PK, session_id TEXT, ts INTEGER,
-  kind TEXT, payload TEXT)       -- append-only，永不 UPDATE
+三條規則的依據：
 
-handoffs(
-  session_id TEXT PK, generated_at INTEGER,
-  source_digest TEXT,            -- 最後 event id + transcript byte offset
-  body TEXT, stale INTEGER)
+1. **正常結束會刪除註冊表檔**（§4.1 實測），所以檔案殘留即異常
+2. **`procStart` 比對**防止 PID 被新行程重用時誤判為存活
+3. **live 檔晚於 transcript 末筆**表示最後一個工具呼叫發出後沒能寫回結果 —— 這正是當機的形狀，且能直接告訴使用者當時卡在哪個指令
 
-pr_snapshots(
-  project_id INTEGER, number INTEGER, title TEXT, state TEXT,
-  review_state TEXT, unresolved_comments INTEGER, checks TEXT,
-  head_sha TEXT, waiting_on TEXT, fetched_at INTEGER,
-  PRIMARY KEY (project_id, number))
+transcript 不含結束標記（§4.2 實測），因此完全不參與此判定，只用於取時間戳比對。
 
-quarantine(
-  id INTEGER PK, source TEXT, raw TEXT, error TEXT, ts INTEGER)
-```
+**Codex**：`ps` 中存在 cwd 相符的 `codex` 行程 → `running`；否則若最後事件距今 **超過 30 分鐘** → `crashed`，未超過則維持 `running`（避免 `ps` 短暫抓不到就誤判）。Codex 無終止事件，因此**永遠不會被判為 `ended_clean`**。所有 Codex session 的 `lifecycleConfidence` 一律標為 `low`，UI 須區分呈現，不得與 Claude Code 的高信心判定混用同一視覺樣式。
 
-### 6.1 專案納入規則
+## 7. 專案納入規則
 
 自動納入條件（全部滿足）：
 
 1. `cwd` 目前存在於檔案系統
 2. `cwd` 或其祖先目錄含 `.git`
-3. **近 14 天有活動** —— 定義為：該專案下任一 session 的 `sessions.last_seen_at` 在 14 天內，或其 transcript 檔的 mtime 在 14 天內（取兩者較新者）。判定於每次 `reconciler` 執行時重算，因此專案會隨活動自動進出看板
+3. **近 14 天有活動** —— 定義為：該專案下任一 session 的註冊表 `updatedAt`，或其 transcript 檔的 mtime，兩者取較新者在 14 天內
 
-排除路徑前綴：`/private/tmp`、`/var/folders`、`~/Downloads`（使用者現有專案目錄中正好含這三類雜訊）。
+排除路徑前綴：`/private/tmp`、`/var/folders`、`~/Downloads`（使用者現有的 26 個專案目錄中正好含這三類雜訊）。
 
-支援手動 `pinned`（永遠置頂）與 `hidden`（永久隱藏）。
-
-## 7. Lifecycle 判定
-
-`reconciler` 的判定為純函式，可完整單元測試：
-
-| 註冊表檔 | PID | `procStart` 比對 | 終止事件 | → lifecycle |
-|---|---|---|---|---|
-| 存在 | 活著 | 相符 | 無 | `running` |
-| 存在 | 死亡 | — | 無 | `crashed` |
-| 存在 | 活著 | **不符** | 無 | `crashed`（PID 已被重用） |
-| 任意 | 任意 | — | 有 `SessionEnd` | `ended_clean` |
-| 不存在 | — | — | 無 | `crashed` |
-
-`procStart` 比對是防止 PID 重用誤判的關鍵。此規則讓「歷史上的當機」在重裝看板後仍驗得出來。
-
-Codex 因無註冊表，判定規則為：`ps` 中存在 cwd 相符的 `codex` 行程 → `running`；否則若最後事件距今 **超過 30 分鐘** → `crashed`，未超過則維持 `running`（避免 `ps` 短暫抓不到就誤判）。所有 Codex session 的 `lifecycle_confidence` 一律標為 `low`。
-
-Codex 亦無 `SessionEnd` 事件，因此**永遠不會被判為 `ended_clean`** —— 這是已知限制，UI 須以 `lifecycle_confidence` 區分呈現，不得與 Claude Code 的高信心判定混用同一視覺樣式。
+支援手動 `pinned`（永遠置頂）與 `hidden`（永久隱藏），存於 `~/.helm/projects.json`（使用者設定的唯一真實來源，見 §4.4）。被 `pinned` 的專案不受 14 天規則約束，永遠顯示。
 
 ## 8. 交接簡報
 
@@ -288,10 +290,10 @@ Codex 亦無 `SessionEnd` 事件，因此**永遠不會被判為 `ended_clean`**
 
 - 最後 **20 則**純文字 user prompt（不含 tool_result 與系統注入內容）
 - 該 session 碰過的檔案清單（去重，取最近 50 筆）
-- `git diff --stat` 與 `git status --short`（未 commit 的變更）
+- `git diff --stat` 與 `git status --short`
 - 最後 **3 輪**的工具呼叫（工具名 + 輸入摘要，Bash 取完整指令）
 
-以實測樣本（7679 行、224 筆純文字 prompt）估算，此組合約 3–6k token，遠低於整份 transcript。
+以實測樣本（7679 行、224 筆純文字 prompt）估算，此組合約 3–6k token。
 
 **輸出**：固定七欄結構化 JSON。
 
@@ -301,22 +303,19 @@ Codex 亦無 `SessionEnd` 事件，因此**永遠不會被判為 `ended_clean`**
 
 **觸發時機**：
 
-1. daemon 於 ingest 時發現 `SessionEnd` 事件 → 背景產生（正常結束）
-2. 判定 `crashed` 的 session → **在使用者開啟看板那一刻**才產生（懶惰求值，避免為永遠不會回去的 session 燒 token）
-3. 手動重新整理
+1. 使用者在選單列展開某張卡片，或執行 `helm brief <id>`
+2. `helm menu` 發現 `crashed` 的 session 尚無簡報時，**以 stale-while-revalidate 在背景產生**（見 §4.4），當次仍顯示降級內容
 
-注意觸發時機 1 由 **daemon** 執行而非 hook —— hook 只寫 spool（不變量 I2）。若 session 結束時 daemon 未執行，該事件留在 spool 中，於 daemon 下次啟動 ingest 時補產生。因此「daemon 沒開就沒簡報」不成立，只會延後。
-
-**快取閘門**：`handoffs.source_digest` 記錄產生當下的「最後 event id + transcript byte offset」。下次比對未變則直接使用快取，變了才標 `stale`。這是控制 token 花費的唯一機制。
+**永不主動為所有 session 產生簡報。** 這是懶惰求值，避免為永遠不會回去的 session 燒 token。
 
 **產生方式**：headless `claude -p`，輸出強制為 JSON schema。
 
 ## 9. 一鍵 Resume
 
-`launcher` 組出的動作：
+`launch` 組出的動作：
 
 1. 將交接簡報寫入 `~/.helm/briefs/<session_id>.md`
-2. 開啟終端機新分頁（預設偵測 iTerm2，fallback `Terminal.app`，可設定）
+2. 開啟終端機新分頁（預設偵測 iTerm2 —— 使用者已安裝，fallback `Terminal.app`，可設定）
 3. `cd <cwd>`
 4. 執行 adapter 提供的 resume 指令
 5. 自動送出開場訊息：`讀 ~/.helm/briefs/<session_id>.md 後接續`
@@ -327,22 +326,22 @@ Codex 亦無 `SessionEnd` 事件，因此**永遠不會被判為 `ended_clean`**
 
 ## 10. PR 追蹤
 
-`remote` 是唯一對外發網路請求的單元，架構上完全隔離。
+`remote` 是唯一對外發網路請求的單元。它**只在慢速路徑執行**，透過 stale-while-revalidate 更新，絕不阻塞選單列刷新。
 
 **資料來源**：`gh pr list --json` 與 `gh pr view --json reviews,comments,statusCheckRollup`（實測環境 `gh 2.76.2`）。
 
-**輪詢策略**：每個 repo 快取 60 秒，僅在看板開啟時輪詢。
+**快取 TTL**：60 秒。
 
 **「在等誰」判定**：
 
-| 條件 | waiting_on |
+| 條件 | waitingOn |
 |---|---|
 | 有未解決的 review comment | `等你改` |
 | 無 review 記錄 | `等人審` |
 | CI 執行中或失敗 | `等 CI` |
 | 通過且無阻擋 | `可合併` |
 
-**四種降級**（各自顯示為卡片上一行灰字，絕不阻塞看板其餘部分）：`gh` 不存在、未登入、rate limit、repo 無 remote。
+**四種降級**（各自顯示為一行灰字，絕不阻塞其餘部分）：`gh` 不存在、未登入、rate limit、repo 無 remote。
 
 ## 11. UI
 
@@ -350,35 +349,42 @@ Codex 亦無 `SessionEnd` 事件，因此**永遠不會被判為 `ended_clean`**
 
 五種，無模糊地帶：
 
-| 標記 | 意義 |
-|---|---|
-| ● 綠實心 | agent 正在跑（`running` + `busy`） |
-| ○ 綠空心 | 活著但在等你輸入（`running` + `idle`） |
-| ● 灰 | 正常結束（`ended_clean`） |
-| ● 紅 | **異常中斷，有未回收的斷點**（`crashed`） |
-| ● 黃 | PR 在等你改 |
+| 標記 | 意義 | 來源 |
+|---|---|---|
+| ● 綠實心 | agent 正在跑 | 註冊表 `status: busy` |
+| ○ 綠空心 | 活著但在等你輸入 | 註冊表 `status: idle` |
+| ● 灰 | 正常結束 | `ended_clean` |
+| ● 紅 | **異常中斷，有未回收的斷點** | `crashed` |
+| ● 黃 | PR 在等你改 | `waitingOn: 等你改` |
 
-選單列圖示顯示當下最需要注意的狀態；只要存在紅點，圖示即為紅色。
+選單列標題顯示當下最需要注意的狀態；只要存在紅點，標題即為紅色。`lifecycleConfidence: low`（Codex）的項目在圓點後加註 `?`。
 
-### 11.2 選單列（Swift, `MenuBarExtra`）
+### 11.2 選單列宿主：SwiftBar
 
-專案分組列表，每列為「專案名 + 圓點 + session 數 + 最後活動 + PR badge」。點擊展開簡報前三行與兩顆按鈕（開終端機／看詳情）。
+不自行開發原生 app。以 SwiftBar（`brew install --cask swiftbar`，2.0.1，使用者目前未安裝）作為宿主。
 
-此層僅呼叫 daemon HTTP 並 render，不含任何業務邏輯。目標 300 行以內。
+Plugin 檔 `~/Library/Application Support/SwiftBar/helm.5s.sh`，內容為單行呼叫：
 
-### 11.3 Web 詳情頁
+```sh
+#!/bin/sh
+exec helm menu
+```
 
-完整七欄簡報、工具呼叫時間軸、未 commit diff、PR 清單。所有長內容在此呈現。
+`helm menu` 輸出 SwiftBar 格式：選單列標題、專案分組、每個 session 一列（圓點 + 名稱 + 最後活動 + PR badge），子選單含「開終端機」「看簡報」「隱藏此專案」等可點擊項目（SwiftBar 的 `bash=` 參數直接回呼 `helm open <id>`）。
 
-### 11.4 Daemon
+**效能契約**：`helm menu` 每 5 秒執行一次，必須在 **200ms 內**完成。因此它只走快速路徑（讀註冊表、`live/*.json`、`cache.json`），**絕不讀 transcript、絕不發網路請求、絕不呼叫 LLM**。所有慢速工作透過 §4.4 的背景 fork 完成。
 
-綁定 `127.0.0.1` 隨機 port，port 號與 PID 寫入 `~/.helm/daemon.json`。提供 read API 與 action 端點（觸發 resume、重新產生簡報、重新整理 PR）。
+此契約以自動化測試強制：`helm menu` 在 fixture 環境下的執行時間納入 CI 斷言。
 
-**生命週期**：不註冊 launchd、不開機自啟。由選單列 app 啟動時拉起，或 `helm` CLI 首次呼叫時自動拉起（若 `daemon.json` 中的 PID 已死則重啟）。選單列 app 結束時一併終止 daemon。
+### 11.3 詳情呈現
 
-理由：daemon 唯一的持續性工作是 PR 輪詢，而該輪詢本來就只在看板開啟時進行；事件採集由 hook 獨立完成，不需要常駐行程。這讓「沒開看板時系統零常駐成本」成立。
+`helm brief <id>` 產生 markdown（七欄簡報 + 工具呼叫時間軸 + 未 commit diff + 相關 PR），預設以 `$PAGER` 顯示，`--open` 旗標則寫入暫存 HTML 並以瀏覽器開啟。
 
-**降級**：`helm status` 在 daemon 拉不起來時直接以唯讀模式開啟 SQLite 並輸出，不因 daemon 故障而完全不可用。
+不開發 web 前端。
+
+### 11.4 終端機視圖
+
+`helm status` 輸出彩色表格，內容與選單列一致。這是 P1 的交付物，也是選單列故障時的完整備援。
 
 ## 12. 錯誤處理
 
@@ -386,56 +392,53 @@ Codex 亦無 `SessionEnd` 事件，因此**永遠不會被判為 `ended_clean`**
 
 | 單元 | 策略 |
 |---|---|
-| `collector` | **唯一豁免**：必須靜默（在關鍵路徑上）。錯誤寫入 `~/.helm/collector-errors.log`，`helm doctor` 主動回報 |
-| `daemon` | 每個 adapter 獨立隔離，一個 adapter 失敗不影響其他 |
-| `summarizer` | 逾時或失敗 → 顯示「簡報產生失敗，可重試」並**降級顯示最後 3 則原始 prompt**。永不呈現空白卡片 |
-| `store` | migration 失敗 → 拒絕啟動並指出備份位置，絕不做部分遷移 |
+| `hook` | **唯一豁免**：必須靜默（在關鍵路徑上）。錯誤寫入 `~/.helm/hook-errors.log`，`helm doctor` 主動回報 |
+| `adapters` | 每個 adapter 獨立隔離，Codex adapter 失敗不影響 Claude Code 那半邊 |
+| `summarize` | 逾時或失敗 → 顯示「簡報產生失敗，可重試」並**降級顯示最後 3 則原始 prompt**。永不呈現空白卡片 |
+| `cache` | 解析失敗 → 視為空快取重建，並將損壞檔移至 `~/.helm/cache.corrupt.json` 供追查。快取毀損絕不導致 CLI 無法執行 |
 | `remote` | 四種降級，見 §10 |
+| `render` | 純函式、無 I/O。輸入已於邊界驗證，故不做二次防禦；任何未預期輸入應在驗證層攔下並計數 |
 
-**邊界驗證**：所有外部輸入（spool、transcript、`gh` JSON、原生註冊表）皆通過 schema 驗證。解析失敗的記錄寫入 `quarantine` 表而非丟棄，供事後追查格式變更。
+**邊界驗證**：所有外部輸入（`live/*.json`、註冊表、transcript、`gh` JSON、`cache.json`）皆通過 schema 驗證。解析失敗的記錄計數並由 `helm doctor` 回報 —— 這是偵測「上游 CLI 改了格式」的機制。
 
 ## 13. 測試策略
 
 目標覆蓋率 80%。
 
 **單元測試**
-- `store`：CRUD 與 migration
-- `reconciler`：§7 判定真值表的每一列
+- `reconcile`：§6 判定真值表的每一列（Claude Code 5 列 + Codex 3 種情境）
 - 兩個 adapter 的解析器：餵真實 fixture
-- `summarizer`：prompt 組裝與快取 digest 計算
-- `launcher`：指令組裝（組而不執行）
+- `render`：純函式，三種輸出格式的快照測試
+- `summarize`：輸入組裝與 digest 計算
+- `launch`：指令組裝（組而不執行）
+- `remote`：`waitingOn` 判定的四種條件 + 四種降級
 - 專案納入規則：含三類排除路徑
 
 **整合測試**
-- spool → ingest → store → API 全鏈路，使用暫時 DB
+- fixture 目錄 → `helm scan` → `helm menu` 全鏈路
+- stale-while-revalidate：驗證背景 fork 不阻塞主輸出
 
-**E2E**
-- 灌入 fixture 集、啟動 daemon、驗證 API 回應與 `helm status` 輸出
+**效能測試**
+- `helm menu` 在 fixture 環境下 < 200ms（CI 斷言，見 §11.2）
 
 **Fixture**：從本機真實的 Claude Code transcript 與 Codex rollout 匿名化擷取。這是本專案最重要的測試資產 —— 兩個 CLI 的檔案格式都會隨版本變動，fixture 是唯一的防線。
 
-**Swift 層**不追覆蓋率（薄到僅剩 HTTP 呼叫與 render），以手動驗收替代。
-
 ## 14. 目錄結構
 
-依功能切分，非依型別。
+依功能切分，非依型別。單一 TypeScript 專案。
 
 ```
 helm/
-  packages/
-    core/src/
-      store/          # schema, migration, queries
-      adapters/       # types.ts, claude-code.ts, codex.ts
-      reconcile/      # lifecycle 判定純函式
-      summarize/      # 簡報產生與快取
-      remote/         # gh 包裝與 waiting_on 判定
-      launch/         # 終端機指令組裝
-    hook/             # 安裝器 + spool 寫入的 sh 片段
-    daemon/           # 批次 ingest、排程、HTTP
-    cli/              # helm status | open | doctor | install | uninstall
-    web/              # 詳情頁
-  apps/
-    menubar/          # Swift package
+  src/
+    adapters/       # types.ts, claude-code.ts, codex.ts
+    reconcile/      # lifecycle 判定純函式
+    cache/          # cache.json 讀寫 + stale-while-revalidate
+    summarize/      # 簡報產生
+    remote/         # gh 包裝與 waitingOn 判定
+    launch/         # 終端機指令組裝
+    render/         # swiftbar.ts, table.ts, markdown.ts（純函式）
+    cli/            # 指令進入點
+    hook/           # PreToolUse 片段 + 安裝／解除安裝器
   fixtures/
   docs/superpowers/specs/
 ```
@@ -444,22 +447,25 @@ helm/
 
 ## 15. 實作分期
 
-每期結束皆為可獨立使用的交付物。
-
 | 期 | 交付 | 使用者得到什麼 |
 |---|---|---|
-| P1 | `core`（store + claude-code adapter + reconciler）+ `hook` + `helm status` | 終端機一行指令看到全部 session 與紅色斷點標記 |
-| P2 | `summarizer` + `launcher` | 交接簡報 + 一鍵開 |
-| P3 | `menubar` 殼 + `web` 詳情頁 | 選單列常駐看板 |
-| P4 | `codex` adapter | Codex session 一併納入 |
-| P5 | PR 追蹤 | 審查狀態與「在等誰」 |
+| P1 | `adapters/claude-code` + `reconcile` + `render/table` + `helm status` / `helm scan --json` | 終端機一行指令看到全部 session 與紅色斷點標記；`--json` 供其他工具串接 |
+| P2 | `summarize` + `launch` + `cache` | 交接簡報 + 一鍵開 |
+| P3 | `render/swiftbar` + `helm menu` + hook + 安裝器 | 選單列常駐看板，含「此刻正在跑什麼」 |
+| P4 | `adapters/codex` | Codex session 一併納入 |
+| P5 | `remote` | PR 審查狀態與「在等誰」 |
+
+P1 即為可用交付物。P3 完成即滿足原始需求全貌。
 
 ## 16. 已知風險
 
 | 風險 | 緩解 |
 |---|---|
-| Claude Code / Codex 檔案格式隨版本變更 | schema 驗證 + `quarantine` 表 + fixture 測試；`helm doctor` 回報格式異常 |
-| 全域 hook 影響所有專案 | `HELM_OFF=1` kill switch；安裝前備份；附加而非覆蓋 |
-| Codex 存活性判定較弱（無 PID 註冊表） | `lifecycle_confidence: low`，UI 區分呈現，不與 Claude Code 的高信心判定混淆 |
-| 交接簡報 token 成本失控 | `source_digest` 快取閘門 + 對 `crashed` session 懶惰求值 |
-| 選單列 app 需簽章／公證才能穩定常駐 | P3 才處理；先以本機 build 執行，必要時走 ad-hoc 簽章 |
+| Claude Code / Codex 檔案格式隨版本變更 | schema 驗證 + fixture 測試；`helm doctor` 回報解析失敗計數 |
+| 全域 hook 影響所有專案 | 只有一個 hook；`HELM_OFF=1` kill switch；安裝前備份；附加而非覆蓋；`helm uninstall` 30 秒完全脫身 |
+| SwiftBar 為第三方相依 | `helm status` 提供完整的終端機備援（§11.4），SwiftBar 只是宿主不是必要條件 |
+| `helm menu` 每 5 秒執行，Node 冷啟動約 60ms | 佔用約 1.2% CPU，可接受；若不足則調整 plugin 檔名間隔（SwiftBar 以檔名決定） |
+| Codex 存活性判定較弱（無 PID 註冊表） | `lifecycleConfidence: low`，UI 區分呈現 |
+| 交接簡報 token 成本失控 | digest 快取閘門 + 僅對展開的卡片懶惰求值 |
+| 無事件歷史，transcript 遭清理即失去過往 | 使用者設定 `cleanupPeriodDays: 100`；若日後成為問題，加儲存層不需重寫上層（§3.3） |
+| **Claude Code 可能於啟動時清理他人殘留的註冊表檔**，抹除當機證據 | 未經實測證實，屬殘餘不確定性。緩解：`~/.helm/live/*.json` 由 helm 自行管理、上游不會清（§4.3），提供獨立的當機證據來源。P3 完成後此風險大幅降低；P1/P2 期間若遇證據遺失，屬已知限制 |
