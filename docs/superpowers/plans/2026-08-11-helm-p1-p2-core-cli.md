@@ -379,7 +379,7 @@ export interface SessionState extends DiscoveredSession {
 ```ts
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readRegistry } from './registry.ts'
@@ -501,6 +501,9 @@ export function readRegistry(sessionsDir: string): RegistryReadResult {
   try {
     names = readdirSync(sessionsDir).filter((n) => n.endsWith('.json'))
   } catch {
+    // Degrade, don't throw: a missing or unreadable sessions directory just
+    // means "no Claude Code sessions to report" — it must never take down a
+    // status check the user is running mid-development.
     return { entries: [], invalid: 0 }
   }
 
@@ -532,10 +535,16 @@ function parseOne(file: string): RegistryEntry | null {
       updatedAt: d.updatedAt,
     }
   } catch {
+    // Degrade to null (counted as `invalid`), don't throw. Two things land
+    // here and both are expected: a genuinely corrupt file, and the benign
+    // race where Claude Code deletes the file between our readdirSync and
+    // readFileSync — which is exactly what it does on clean session exit.
     return null
   }
 }
 ```
+
+註解不是可選的。Global Constraints 要求每個降級的 `catch` 都說明為何此處降級是對的 —— 沒有註解的 `catch` 讀起來與吞錯無法區分。
 
 - [ ] **Step 5: 執行測試確認通過**
 
