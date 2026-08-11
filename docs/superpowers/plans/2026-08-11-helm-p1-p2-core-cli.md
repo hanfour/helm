@@ -2136,11 +2136,16 @@ export interface RenderOptions {
 
 const SHORT_ID = 8
 
+/**
+ * All four labels are exactly three CJK characters wide on purpose: a CJK
+ * glyph occupies two terminal columns, so padEnd() with ASCII spaces can
+ * never align them. Equal length is the only thing that lines the column up.
+ */
 const LABEL: Record<StatusKey, string> = {
   busy: '執行中',
   idle: '等輸入',
   ended: '已結束',
-  crashed: '中斷',
+  crashed: '已中斷',
 }
 
 export function renderTable(projects: readonly ProjectView[], opts: RenderOptions): string {
@@ -2160,7 +2165,7 @@ function renderSession(s: SessionState, opts: RenderOptions): string {
   const key = statusOf(s)
   const head = [
     glyph(key, s.lifecycleConfidence, opts.color),
-    LABEL[key].padEnd(3, ' '),
+    LABEL[key],
     s.sessionId.slice(0, SHORT_ID),
     relativeTime(s.updatedAt, opts.nowMs),
   ].join('  ')
