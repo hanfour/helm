@@ -2591,6 +2591,30 @@ test('gitBranch 取最後一筆有記錄的值', () => {
   assert.equal(readTranscriptDigest(f).gitBranch, 'feature/x')
 })
 
+test('content block 形狀不對時只跳過該 block，不讓整份 digest 崩潰', () => {
+  // {type:'text'} 缺 text 欄位會通過 union 的 OtherBlock（passthrough），
+  // 用 b.type === 'text' 判斷再 cast 會拿到 undefined 並在 .trim() 炸掉。
+  const f = jsonl([
+    { type: 'user', timestamp: '2026-08-11T01:00:00.000Z',
+      message: { content: [{ type: 'text' }] } },
+    { type: 'user', timestamp: '2026-08-11T01:30:00.000Z',
+      message: { content: [{ type: 'text', text: 123 }] } },
+    userText('真的訊息', '2026-08-11T02:00:00.000Z'),
+  ])
+  assert.deepEqual(readTranscriptDigest(f).prompts, ['真的訊息'])
+})
+
+test('tool_use block 形狀不對時同樣只跳過該 block', () => {
+  const f = jsonl([
+    { type: 'assistant', timestamp: '2026-08-11T01:00:00.000Z',
+      message: { content: [{ type: 'tool_use', input: 'not-an-object' }] } },
+    toolUse('Bash', { command: 'npm test' }, '2026-08-11T02:00:00.000Z'),
+  ])
+  const d = readTranscriptDigest(f)
+  assert.equal(d.recentTools.length, 1)
+  assert.equal(d.recentTools[0]?.summary, 'npm test')
+})
+
 test('畸形行被跳過，不影響其餘解析', () => {
   const dir = mkdtempSync(join(tmpdir(), 'helm-tr-'))
   const f = join(dir, 's.jsonl')
@@ -2764,17 +2788,31 @@ function absorbAssistant(
 
 type ToolUse = z.infer<typeof ToolUseBlock>
 
+/**
+ * Re-parse each element with the specific block schema rather than testing
+ * `b.type` and casting. A block like `{type:'text'}` with no `text` field
+ * fails TextBlock, falls through the union to OtherBlock's passthrough, and
+ * still reads as `type === 'text'` — so a cast would hand downstream code an
+ * `undefined` and crash the whole digest. safeParse is the only check that
+ * actually holds at runtime.
+ */
 function blocks(rec: TranscriptRecord): ToolUse[] {
   const content = rec.message?.content
   if (!Array.isArray(content)) return []
-  return content.filter((b): b is ToolUse => b.type === 'tool_use')
+  return content.flatMap((b) => {
+    const parsed = ToolUseBlock.safeParse(b)
+    return parsed.success ? [parsed.data] : []
+  })
 }
 
 function userTexts(rec: TranscriptRecord): string[] {
   const content = rec.message?.content
   if (typeof content === 'string') return [content]
   if (!Array.isArray(content)) return []
-  return content.flatMap((b) => (b.type === 'text' ? [(b as { text: string }).text] : []))
+  return content.flatMap((b) => {
+    const parsed = TextBlock.safeParse(b)
+    return parsed.success ? [parsed.data.text] : []
+  })
 }
 
 /**
