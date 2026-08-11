@@ -1,0 +1,57 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { parseBriefJson, generateBrief } from './brief.ts'
+import type { SummaryInput } from './input.ts'
+
+const INPUT: SummaryInput = {
+  sessionId: 's1', cwd: '/p', gitBranch: 'main',
+  prompts: ['修好登入'], touchedFiles: [], recentTools: [],
+  gitDiffStat: '', gitStatusShort: '',
+}
+
+const VALID = JSON.stringify({
+  goal: '修好登入流程', done: ['寫了測試'], currentStep: '實作 token 驗證',
+  nextStep: '跑 npm test', blockers: [], files: ['/p/auth.ts'], prs: [],
+})
+
+test('解析合法的 JSON 簡報', () => {
+  const b = parseBriefJson(VALID)
+  assert.equal(b?.goal, '修好登入流程')
+  assert.deepEqual(b?.done, ['寫了測試'])
+})
+
+test('容忍 LLM 包上的 markdown 程式碼圍欄', () => {
+  const fenced = '```json\n' + VALID + '\n```'
+  assert.equal(parseBriefJson(fenced)?.goal, '修好登入流程')
+})
+
+test('容忍 JSON 前後的閒聊文字', () => {
+  assert.equal(parseBriefJson(`好的，這是簡報：\n${VALID}\n希望有幫助。`)?.goal, '修好登入流程')
+})
+
+test('缺少的欄位以空值補齊而非整份拒絕', () => {
+  const b = parseBriefJson(JSON.stringify({ goal: '只有目標' }))
+  assert.equal(b?.goal, '只有目標')
+  assert.deepEqual(b?.done, [])
+  assert.equal(b?.nextStep, '')
+})
+
+test('完全不是 JSON 時回傳 null', () => {
+  assert.equal(parseBriefJson('抱歉我無法完成這個請求'), null)
+})
+
+test('generateBrief 把 prompt 交給 runner 並解析結果', async () => {
+  let seen = ''
+  const b = await generateBrief(INPUT, async (p) => { seen = p; return VALID })
+  assert.ok(seen.includes('修好登入'))
+  assert.equal(b?.goal, '修好登入流程')
+})
+
+test('runner 拋錯時回傳 null 而不向上拋', async () => {
+  const b = await generateBrief(INPUT, async () => { throw new Error('claude 掛了') })
+  assert.equal(b, null)
+})
+
+test('runner 回傳無法解析的內容時回傳 null', async () => {
+  assert.equal(await generateBrief(INPUT, async () => '???'), null)
+})

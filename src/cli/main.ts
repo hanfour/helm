@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { runBrief } from './brief.ts'
 import { runStatus } from './status.ts'
 
 const USAGE = `helm — 本機 agent CLI 艦隊看板
@@ -6,16 +7,19 @@ const USAGE = `helm — 本機 agent CLI 艦隊看板
 用法：
   helm status [--json] [--no-color]   列出所有專案與 session 狀態
   helm scan                           等同 helm status --json
+  helm brief <id> [--refresh]         顯示某個 session 的交接簡報
   helm help                           顯示本說明
 `
 
-function main(argv: readonly string[]): number {
+async function main(argv: readonly string[]): Promise<number> {
   const [command = 'status', ...rest] = argv
   switch (command) {
     case 'status':
       return runStatus(rest)
     case 'scan':
       return runStatus([...rest, '--json'])
+    case 'brief':
+      return runBrief(rest)
     case 'help':
     case '--help':
     case '-h':
@@ -27,4 +31,4 @@ function main(argv: readonly string[]): number {
   }
 }
 
-process.exitCode = main(process.argv.slice(2))
+process.exitCode = await main(process.argv.slice(2))
