@@ -4909,13 +4909,18 @@ git commit -m "fix: 一個壞 PID 不再讓整批存活性判定誤報為當機"
 
 **探索**：transcript 是主要來源（持久事實：session 存在過、在哪個 cwd、最後活動時間），註冊表降為補充（當下狀態：還活著嗎、busy/idle、PID 與 procStart）。兩者以 `sessionId` join。
 
-**效能已實測可行**：靠目錄 mtime 先篩掉整個沒動過的專案，2846 份檔案只需 stat 424 份。
+**效能已實測可行**：~~靠目錄 mtime 先篩掉整個沒動過的專案，2846 份檔案只需 stat 424 份。~~
+
+**已修正（實作時重測）**：原本的 2846 份把巢狀 `<session-id>/` 目錄底下的 sidecar 檔也算了進去，那些不是 session transcript，本來就不該掃。真正的 transcript 只在每個專案目錄的**頂層**，實測只有 499 份：
 
 ```
-目錄數 27 → 需 stat 424 檔 → 近 14 天有活動 158 個 → 耗時 8.2 ms
+不遞迴、全部 stat：28 個目錄 → 499 檔 → 近 14 天 161 個 → 耗時 6.9 ms
+加上目錄 mtime 預篩：只需 stat 427 檔 → 耗時 3.0 ms
 ```
 
-契約是 200ms，餘裕充足。**不得讀取 transcript 內容，只 stat**。
+**因此不採用目錄 mtime 預篩**。它只省 3.9 ms（契約 200ms 的 2%），卻換來一個正確性漏洞：對既有檔案 append 不會更新目錄的 mtime，所以「14 天內沒開過新 session、但一直在用同一個舊 session」的專案會被整個篩掉。純效能的優化不值得這個代價。
+
+**不得讀取 transcript 內容，只 stat**，且**不得遞迴**。
 
 **主視圖**：一個專案一行。
 
@@ -4940,14 +4945,43 @@ session id 前綴的比對維持現狀。判斷順序：先試專案名，無結
 
 **多個活著的 session**：使用者會同時在一個專案開多個 CLI。`helm open <專案>` 若發現該專案有超過一個活著的 session，列出來讓他選，不要自動挑。只有一個時直接開。
 
+### slug 反解（實作時補上，計畫原本漏了）
+
+計畫寫「transcript 探索出 cwd」，但沒說**怎麼**從目錄名拿回 cwd。實測釐清了兩件事：
+
+1. **Claude Code 的 slug 是逐字元取代 `[^a-zA-Z0-9]` 為 `-`，不是整段取代。** 證據：
+   - `/Users/u/.pmk/review-workspace` → `-Users-u--pmk-review-workspace`（兩個 dash）
+   - `/Users/u/Downloads/季評分Q1-reports` → `-Users-u-Downloads----Q1-reports`（四個 dash）
+
+   既有的 `slugifyCwd` 用的是 `[^a-zA-Z0-9]+`（整段），**這是一個既存缺陷**：任何路徑含中文或連續非英數字元的專案，`findTranscript` 都會找不到而靜默回 null。一併修掉。
+
+2. **反解必然是有損的**，一個 `-` 可能來自 `/`、`.`、`-`、空白或任何一個中文字，所以唯一可靠的做法是**走真實檔案系統回推**：逐層 readdir，比對哪些子目錄的 slug 形式能吃掉這段前綴，長的優先、走死路要回溯。實測 28 個 slug 全部反解耗時 5.3 ms，並加了步數上限防止病態目錄結構指數展開。
+
+3. **cwd 必須正規化。** macOS 檔案系統大小寫不敏感但保留大小寫：註冊表記的是使用者打的 `~/Acme/TokenSvc`，磁碟上是 `token-service`。不正規化的話同一個專案會裂成兩行 —— 正是這個 Task 要消滅的東西。用 `realpathSync.native`，失敗就原樣退回（該路徑已不存在，下游 `cwdExists` 本來就會濾掉）。
+
+反解不出來的 slug 直接略過，不計入 `invalid` 警告：反解失敗等於該目錄已不存在，`shouldInclude` 的 `cwdExists` 規則本來就會濾掉它，不是靜默資料遺失。
+
 ### Files
 
 - Modify: `src/adapters/claude-code/discover.ts` 與其測試
+- Create: `src/adapters/claude-code/slug.ts` 與其測試（slugify 與反解，計畫原本漏了）
+- Create: `src/adapters/claude-code/scan.ts` 與其測試（transcript 掃描）
 - Create: `src/projects/resolve.ts` 與其測試（名稱解析，純函式）
 - Modify: `src/projects/group.ts` 與其測試（專案層級的狀態聚合）
+- Modify: `src/projects/include.ts`（補 `/private/var/folders`，macOS 會把 `/var` 解到這裡）
+- Create: `src/session-status.ts` 與其測試（`StatusKey`／`statusOf` 從 render 層抽出，
+  否則 `group.ts` 得反向依賴 `render/glyphs.ts`；順帶收掉 Task 11 留下的同類 minor）
+- Create: `src/board.ts`（`StatusResult` 改名 `Board` 並移出 `cli/status.ts`，
+  解掉 `render/table.ts` 反向 import orchestration 層的問題 —— Task 11 的 deferred minor）
+- Create: `src/render/width.ts` 與其測試（終端機顯示寬度；`padEnd` 數的是 UTF-16 單位，
+  對不齊中文欄位）
 - Modify: `src/render/table.ts` 與其測試（一專案一行）
 - Create: `src/render/sessions.ts` 與其測試（`helm sessions` 的展開視圖）
-- Modify: `src/cli/status.ts`、`src/cli/brief.ts`、`src/cli/open.ts`、`src/cli/main.ts`
+- Create: `src/cli/target.ts` 與其測試（`brief`／`sessions`／日後的 `open` 共用同一套
+  目標解析與歧義訊息，避免三個指令對「你指的是哪個」給出三種答案）
+- Create: `src/cli/sessions.ts` 與其測試
+- Modify: `src/cli/status.ts`、`src/cli/brief.ts`、`src/cli/main.ts`
+- （`src/cli/open.ts` 屬 Task 10，此時尚未存在）
 
 ### Interfaces
 
@@ -4957,6 +4991,14 @@ session id 前綴的比對維持現狀。判斷順序：先試專案名，無結
 - `resolveTarget(projects: readonly ProjectView[], query: string): ResolveResult`
 - `type ResolveResult = { kind: 'project'; project: ProjectView } | { kind: 'session'; session: SessionState } | { kind: 'ambiguous'; candidates: string[] } | { kind: 'notfound' }`
 - `renderTable` 改為一專案一行；session 層級的呈現移到 `renderSessions`
+- `discoverClaudeCode` 第三參數 `deps: DiscoverDeps = { subdirs, canonicalPath }`，供測試注入
+- `resolveSlug(slug: string, deps: { subdirs: (dir: string) => readonly string[] }): string | null`
+- `resolveOrReport(projects, query, write): TargetHit | null` 與 `chosenSession(hit)`
+
+**刻意的行為變更**：session id 前綴撞到多個時，舊的 `resolveSession` 回傳第一個
+（`brief.test.ts` 當時留了測試明說「日後若改成報錯，這個測試會提醒你那是刻意的」）。
+現在改為列出候選並要求使用者打長一點 —— 挑錯 session 等於弄丟他的進度。
+`resolveSession` 已由 `resolveOrReport` 取代。
 
 ### 驗收（重點，不可略過）
 
@@ -4967,6 +5009,27 @@ session id 前綴的比對維持現狀。判斷順序：先試專案名，無結
 5. 仍在註冊表裡的 session 保留正確的 busy/idle 與紅點判定，不因改用 transcript 探索而退化
 6. `time helm status` 仍在 200ms 內，數字貼進報告
 7. 雜訊路徑（`/private/tmp`、`Downloads`、`var/folders`）仍被排除
+
+### 驗收結果（2026-08-11 實測）
+
+1. ✅ 11 個專案、一個專案一行，`project-alpha` 在列（原本完全看不到）
+2. ✅ `helm sessions project-alpha` 展開 21 個 session，含計畫點名的 `19519d4f`
+3. ⚠️ 部分達成 —— 解析、transcript 讀取、git 快照、prompt 組裝、渲染全通（用假 runner 跑完整條路徑，
+   prompt 22,234 字元），**真正的 LLM 呼叫未執行**，那是一次要花錢的付費呼叫，留給使用者決定
+4. ✅ 以同一個 resolver 驗證（`helm sessions data-svc`）：列出 `data-svc-2.0` 與
+   `data-svc-2.0-clone` 並提示「打長一點」，不自動挑。`helm open` 本身屬 Task 10
+5. ✅ 以 fixture 驗證：註冊表殘留（PID 已死）仍判紅點並顯示「1 個中斷未回收」，
+   同專案底下 transcript-only 的 session 顯示「已結束」，兩者並存
+6. ✅ `collectStatus` 5 次量測 78.0 / 78.2 / 78.4 / 81.5 / 89.4 ms（契約 200ms）。
+   CLI 端到端 0.32–0.40 s，差額是 Node 啟動與 TypeScript 型別剝離，不在契約範圍
+7. ✅ `/private/tmp`、`Downloads`、`var/folders` 皆未出現在輸出中
+
+覆蓋率 96.94%（270 個測試全綠，`tsc --noEmit` 乾淨）。
+
+### 給 Task 12 的觀察
+
+跑驗收 fixture 時 `ps` 的錯誤訊息（`ps: process id too large: 4194303`）直接漏到使用者的終端機，
+因為 `execFileSync` 繼承了 stderr。Task 12 在處理 ps 批次失敗時應一併把 stderr 導掉。
 
 ### 一個誠實的限制
 

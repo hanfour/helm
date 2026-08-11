@@ -1,7 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { renderTable } from './table.ts'
-import type { StatusResult } from '../cli/status.ts'
+import { displayWidth } from './width.ts'
+import type { Board } from '../board.ts'
 import type { ProjectView } from '../projects/group.ts'
 import type { SessionState } from '../types.ts'
 
@@ -16,14 +17,18 @@ const sess = (over: Partial<SessionState>): SessionState => ({
   lifecycleConfidence: 'high', live: null, ...over,
 })
 
-const proj = (over: Partial<ProjectView>): ProjectView => ({
-  path: '/Users/testuser/proj', name: 'proj', pinned: false,
-  lastActivityMs: NOW - 5 * 60_000, sessions: [sess({})], ...over,
-})
+const proj = (over: Partial<ProjectView>): ProjectView => {
+  const sessions = over.sessions ?? [sess({})]
+  return {
+    path: '/Users/testuser/proj', name: 'proj', pinned: false,
+    lastActivityMs: NOW - 5 * 60_000, aggregateStatus: 'idle',
+    sessionCount: sessions.length, ...over, sessions,
+  }
+}
 
 const opts = { color: false, nowMs: NOW }
 
-const res = (projects: ProjectView[], invalid = 0): StatusResult => ({ projects, invalid })
+const res = (projects: ProjectView[], invalid = 0): Board => ({ projects, invalid })
 
 test('空清單顯示提示而非空字串', () => {
   assert.match(renderTable(res([]), opts), /沒有找到/)
@@ -35,37 +40,84 @@ test('列出專案名稱與相對時間', () => {
   assert.match(out, /5 分鐘前/)
 })
 
-test('crashed 的 session 標示中斷並附上 resume 提示', () => {
-  const out = renderTable(res([proj({ sessions: [sess({ lifecycle: 'crashed' })] })]), opts)
-  assert.match(out, /中斷/)
-  assert.match(out, /helm open/)
+test('一個專案只佔一行，不論底下有幾個 session', () => {
+  const out = renderTable(res([proj({
+    sessions: [
+      sess({ sessionId: 'a' }), sess({ sessionId: 'b' }), sess({ sessionId: 'c' }),
+    ],
+  })]), opts)
+  const rows = out.split('\n').filter((l) => l.includes('proj'))
+  assert.equal(rows.length, 1)
 })
 
-test('session id 截短為前 8 碼', () => {
+test('顯示該專案的 session 總數', () => {
+  const out = renderTable(res([proj({ sessionCount: 25 })]), opts)
+  assert.match(out, /25 個 session/)
+})
+
+test('不再逐一列出 session id —— 那是實作細節，不是使用者介面', () => {
   const out = renderTable(res([proj({})]), opts)
-  assert.match(out, /abcdef12/)
-  assert.ok(!out.includes('abcdef12-3456-7890-abcd-ef1234567890'))
+  assert.ok(!out.includes('abcdef12'))
 })
 
-test('busy 時顯示 live marker 的工具與摘要', () => {
+test('有中斷的專案標示「中斷未回收」', () => {
   const out = renderTable(res([proj({
-    sessions: [sess({
-      nativeStatus: 'busy',
-      live: { sessionId: 'x', ts: NOW, toolName: 'Bash', summary: 'npm test' },
-    })],
+    aggregateStatus: 'crashed',
+    sessions: [sess({ lifecycle: 'crashed' })],
   })]), opts)
-  assert.match(out, /Bash/)
-  assert.match(out, /npm test/)
+  assert.match(out, /中斷未回收/)
 })
 
-test('idle 時忽略過時的 live marker', () => {
+test('在跑與等輸入的數量分別標示', () => {
   const out = renderTable(res([proj({
-    sessions: [sess({
-      nativeStatus: 'idle',
-      live: { sessionId: 'x', ts: NOW, toolName: 'Bash', summary: 'npm test' },
-    })],
+    aggregateStatus: 'busy',
+    sessions: [
+      sess({ sessionId: 'a', nativeStatus: 'busy' }),
+      sess({ sessionId: 'b', nativeStatus: 'busy' }),
+      sess({ sessionId: 'c', nativeStatus: 'idle' }),
+    ],
   })]), opts)
-  assert.ok(!out.includes('npm test'))
+  assert.match(out, /2 個在跑/)
+  assert.match(out, /1 個等輸入/)
+})
+
+test('全部 session 都結束的專案不畫圓點', () => {
+  const out = renderTable(res([proj({
+    aggregateStatus: null,
+    sessions: [sess({ lifecycle: 'ended_clean' })],
+  })]), opts)
+  const row = out.split('\n').find((l) => l.includes('proj')) ?? ''
+  assert.ok(!row.includes('●'))
+  assert.ok(!row.includes('○'))
+})
+
+test('低信心的專案狀態帶問號，不把猜測講成事實', () => {
+  const out = renderTable(res([proj({
+    aggregateStatus: 'crashed',
+    sessions: [sess({ lifecycle: 'crashed', lifecycleConfidence: 'low' })],
+  })]), opts)
+  assert.match(out, /●\?/)
+})
+
+test('高信心的專案狀態不帶問號', () => {
+  const out = renderTable(res([proj({
+    aggregateStatus: 'crashed',
+    sessions: [sess({ lifecycle: 'crashed', lifecycleConfidence: 'high' })],
+  })]), opts)
+  assert.ok(!out.includes('●?'))
+})
+
+test('中文專案名的欄位仍然對齊', () => {
+  const out = renderTable(res([
+    proj({ name: '報表工具', path: '/a' }),
+    proj({ name: 'helm', path: '/b' }),
+  ]), opts)
+  const rows = out.split('\n').filter((l) => l.includes('分鐘前'))
+  assert.equal(rows.length, 2)
+  // 對齊要用顯示欄數量，不能用 indexOf —— 那數的是 UTF-16 單位，
+  // 「報表工具」是 4 個單位卻佔 8 欄，兩者本來就不會相等。
+  const at = rows.map((r) => displayWidth(r.slice(0, r.indexOf('5 分鐘前'))))
+  assert.equal(at[0], at[1])
 })
 
 test('pinned 的專案顯示釘選記號', () => {
@@ -74,6 +126,7 @@ test('pinned 的專案顯示釘選記號', () => {
 
 test('底部摘要統計各狀態數量', () => {
   const out = renderTable(res([proj({
+    aggregateStatus: 'crashed',
     sessions: [
       sess({ sessionId: 'a', lifecycle: 'crashed' }),
       sess({ sessionId: 'b', lifecycle: 'running', nativeStatus: 'busy' }),
@@ -83,8 +136,14 @@ test('底部摘要統計各狀態數量', () => {
   assert.match(out, /執行中 1/)
 })
 
+test('提示使用者如何往下鑽 —— 一行一專案後必須指出路', () => {
+  const out = renderTable(res([proj({})]), opts)
+  assert.match(out, /helm sessions/)
+  assert.match(out, /helm open/)
+})
+
 test('color: false 時輸出不含任何 ESC', () => {
-  const out = renderTable(res([proj({ sessions: [sess({ lifecycle: 'crashed' })] })]), opts)
+  const out = renderTable(res([proj({ aggregateStatus: 'crashed' })], 2), opts)
   assert.ok(!out.includes(ESC))
 })
 

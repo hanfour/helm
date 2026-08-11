@@ -1,36 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { statusOf, glyph, relativeTime } from './glyphs.ts'
-import type { SessionState } from '../types.ts'
+import { glyph, relativeTime } from './glyphs.ts'
 
 const ESC = String.fromCharCode(27)
-
-const s = (over: Partial<SessionState>): SessionState => ({
-  adapterId: 'claude-code', sessionId: 'x', cwd: '/p', pid: 1, procStart: null,
-  startedAt: 0, updatedAt: 0, nativeStatus: null, kind: 'interactive', name: '',
-  transcriptPath: null, lifecycle: 'running', lifecycleConfidence: 'high',
-  live: null, ...over,
-})
-
-test('running + busy → busy', () => {
-  assert.equal(statusOf(s({ lifecycle: 'running', nativeStatus: 'busy' })), 'busy')
-})
-
-test('running + idle → idle', () => {
-  assert.equal(statusOf(s({ lifecycle: 'running', nativeStatus: 'idle' })), 'idle')
-})
-
-test('running 但沒有 nativeStatus → idle（保守假設在等輸入）', () => {
-  assert.equal(statusOf(s({ lifecycle: 'running', nativeStatus: null })), 'idle')
-})
-
-test('crashed → crashed，不受 nativeStatus 影響', () => {
-  assert.equal(statusOf(s({ lifecycle: 'crashed', nativeStatus: 'busy' })), 'crashed')
-})
-
-test('ended_clean → ended', () => {
-  assert.equal(statusOf(s({ lifecycle: 'ended_clean' })), 'ended')
-})
 
 test('busy 是實心、idle 是空心', () => {
   assert.equal(glyph('busy', 'high', false), '●')

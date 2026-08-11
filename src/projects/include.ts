@@ -9,7 +9,10 @@ const DAY_MS = 86_400_000
 export const EXCLUDED_PREFIXES: readonly string[] = [
   '/private/tmp',
   '/tmp',
+  // Both spellings are needed: macOS resolves /var to /private/var, so a cwd
+  // reaches us in either form depending on whether it was canonicalized.
   '/var/folders',
+  '/private/var/folders',
 ]
 
 /** Home-relative exclusions, resolved against the caller's home directory. */

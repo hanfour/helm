@@ -1,4 +1,5 @@
 import { basename } from 'node:path'
+import { aggregateStatus, type StatusKey } from '../session-status.ts'
 import type { SessionState } from '../types.ts'
 import { shouldInclude } from './include.ts'
 import type { PrefsFile } from './prefs.ts'
@@ -8,6 +9,9 @@ export interface ProjectView {
   name: string
   pinned: boolean
   lastActivityMs: number
+  /** Rolled up from every session below. Null means all of them have ended. */
+  aggregateStatus: StatusKey | null
+  sessionCount: number
   sessions: SessionState[]
 }
 
@@ -38,6 +42,8 @@ export function groupIntoProjects(
       name: basename(path) || path,
       pinned: deps.prefs.projects[path]?.pinned ?? false,
       lastActivityMs: Math.max(...group.map((s) => s.updatedAt)),
+      aggregateStatus: aggregateStatus(group),
+      sessionCount: group.length,
       sessions: [...group].toSorted((a, b) => b.updatedAt - a.updatedAt),
     }))
     .filter((p) =>

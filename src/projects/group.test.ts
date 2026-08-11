@@ -91,6 +91,28 @@ test('專案內的 session 依 updatedAt 由新到舊排序', () => {
   assert.deepEqual(out[0]?.sessions.map((s) => s.sessionId), ['new', 'old'])
 })
 
+test('專案狀態由其下所有 session 聚合而來', () => {
+  const out = groupIntoProjects(
+    [sess({ sessionId: 'a', lifecycle: 'ended_clean' }),
+     sess({ sessionId: 'b', lifecycle: 'crashed' })],
+    deps,
+  )
+  assert.equal(out[0]?.aggregateStatus, 'crashed')
+})
+
+test('全部 session 都結束的專案沒有狀態圓點', () => {
+  const out = groupIntoProjects([sess({ lifecycle: 'ended_clean' })], deps)
+  assert.equal(out[0]?.aggregateStatus, null)
+})
+
+test('sessionCount 是該專案的 session 總數', () => {
+  const out = groupIntoProjects(
+    [sess({ sessionId: 'a' }), sess({ sessionId: 'b' }), sess({ sessionId: 'c' })],
+    deps,
+  )
+  assert.equal(out[0]?.sessionCount, 3)
+})
+
 test('不修改輸入的 session 陣列', () => {
   const input = [sess({ sessionId: 'a' })]
   const snapshot = structuredClone(input)

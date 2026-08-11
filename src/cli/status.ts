@@ -2,26 +2,28 @@ import { existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { discoverClaudeCode } from '../adapters/claude-code/discover.ts'
 import { queryProcesses, type ProcessProbe } from '../adapters/claude-code/processes.ts'
+import type { Board } from '../board.ts'
 import { resolvePaths, type HelmPaths } from '../paths.ts'
-import { groupIntoProjects, type ProjectView } from '../projects/group.ts'
+import { groupIntoProjects } from '../projects/group.ts'
+import { ACTIVITY_WINDOW_DAYS } from '../projects/include.ts'
 import { readPrefs } from '../projects/prefs.ts'
 import { reconcileSessions } from '../reconcile/lifecycle.ts'
 import { readLiveMarker } from '../reconcile/live.ts'
 import { renderTable } from '../render/table.ts'
-
-export interface StatusResult {
-  projects: ProjectView[]
-  /** Registry files that existed but could not be parsed. Surfaced to the user. */
-  invalid: number
-}
 
 /** Fast path: no transcript parsing, no network, no LLM (spec 5.1). */
 export function collectStatus(
   paths: HelmPaths,
   nowMs: number,
   probe: ProcessProbe = queryProcesses,
-): StatusResult {
-  const { sessions, invalid } = discoverClaudeCode(paths)
+): Board {
+  // One window for both stages: discovery uses it to bound the transcript scan,
+  // grouping uses it to decide which projects are still interesting. Two
+  // different numbers here would show projects with no sessions under them.
+  const { sessions, invalid } = discoverClaudeCode(
+    paths,
+    { windowDays: ACTIVITY_WINDOW_DAYS, nowMs },
+  )
   const alive = probe(sessions.flatMap((d) => (d.pid === null ? [] : [d.pid])))
   const states = reconcileSessions(sessions, {
     alive,
@@ -65,7 +67,7 @@ export function currentPaths(): HelmPaths {
   return home === undefined ? resolvePaths() : resolvePaths({ home })
 }
 
-function useColor(argv: readonly string[]): boolean {
+export function useColor(argv: readonly string[]): boolean {
   if (argv.includes('--no-color')) return false
   if (process.env['NO_COLOR'] !== undefined) return false
   return process.stdout.isTTY === true
