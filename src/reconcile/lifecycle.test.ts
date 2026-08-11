@@ -116,3 +116,15 @@ test('PID 為 null（例如非 Claude Code adapter）時視為註冊表不存在
   })
   assert.equal(out[0]?.lifecycle, 'ended_clean')
 })
+
+test('psLstart 格式有效但時刻不同 → crashed/high（真的 PID 重用，非解析失敗）', () => {
+  // macOS ps -o lstart= can output hour without zero-padding in some locales.
+  // This format is valid and parseable, but the timestamp differs from procStart.
+  // Must return high confidence (genuine PID reuse), not low (parse failure).
+  const psUnpadded = 'Thu Aug  6  6:16:12 2026' // hour not zero-padded
+  const r = decideLifecycle({
+    registryFileExists: true, pidAlive: true, psLstart: psUnpadded,
+    procStart: PROC_START, live: null, transcriptMtimeMs: null,
+  })
+  assert.deepEqual(r, { lifecycle: 'crashed', confidence: 'high' })
+})

@@ -1,5 +1,5 @@
 import type { Confidence, DiscoveredSession, Lifecycle, LiveMarker, SessionState } from '../types.ts'
-import { procStartMatches } from '../adapters/claude-code/processes.ts'
+import { parseLstart, procStartMatches } from '../adapters/claude-code/processes.ts'
 
 export interface LifecycleInput {
   /** Whether ~/.claude/sessions/<pid>.json still exists. */
@@ -44,8 +44,10 @@ function fromRegistry(input: LifecycleInput): LifecycleVerdict {
     return { lifecycle: 'running', confidence: 'high' }
   }
   // Distinguish "genuinely a different process" from "we failed to parse".
-  const unparseable = !/^\w{3}\s+\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4}$/
-    .test(input.psLstart.trim().replace(/\s+/g, ' '))
+  // Ask the canonical parser rather than re-deriving its rules: a second
+  // format check would drift from `parseLstart` and mislabel confidence in
+  // both directions.
+  const unparseable = parseLstart(input.psLstart) === null
   return { lifecycle: 'crashed', confidence: unparseable ? 'low' : 'high' }
 }
 
