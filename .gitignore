@@ -1,3 +1,4 @@
 node_modules/
 fixtures/claude/
 *.log
+.test-scratch/

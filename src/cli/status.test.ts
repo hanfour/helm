@@ -17,9 +17,17 @@ const PROC_START_INSTANT = Date.UTC(2026, 7, 11, 2, 0, 0)
  * and macOS's /var/folders which is what os.tmpdir() resolves to) as noise.
  * A fixture project rooted in the system temp dir would therefore always be
  * filtered out regardless of lifecycle, so fixtures live in a repo-local
- * scratch directory instead, cleaned up after this file's tests finish.
+ * scratch directory instead (gitignored), cleaned up after this file's
+ * tests finish.
+ *
+ * Namespaced by process.pid, and after() only removes that one subtree:
+ * `node --test` can run multiple test files as separate processes, and an
+ * unqualified shared path would let one process's cleanup delete fixtures
+ * a concurrent process is still using mid-test.
  */
-const SCRATCH_ROOT = fileURLToPath(new URL('../../.test-scratch/', import.meta.url))
+const SCRATCH_ROOT = fileURLToPath(
+  new URL(`../../.test-scratch/${process.pid}/`, import.meta.url),
+)
 mkdirSync(SCRATCH_ROOT, { recursive: true })
 after(() => {
   rmSync(SCRATCH_ROOT, { recursive: true, force: true })
