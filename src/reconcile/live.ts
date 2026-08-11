@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod'
 import type { LiveMarker } from '../types.ts'
@@ -7,7 +7,7 @@ const MAX_SUMMARY = 200
 
 const LiveSchema = z.object({
   sessionId: z.string().min(1),
-  ts: z.number(),
+  ts: z.number().default(0),
   toolName: z.string().default(''),
   summary: z.string().default(''),
 }).passthrough()
@@ -24,13 +24,17 @@ export function readLiveMarker(liveDir: string, sessionId: string): LiveMarker |
     return null
   }
   try {
-    const raw = readFileSync(join(liveDir, `${sessionId}.json`), 'utf8')
+    const file = join(liveDir, `${sessionId}.json`)
+    const raw = readFileSync(file, 'utf8')
     const parsed = LiveSchema.safeParse(JSON.parse(raw))
     if (!parsed.success) return null
     const d = parsed.data
     return {
       sessionId: d.sessionId,
-      ts: d.ts,
+      // The hook writes 0: POSIX sh has no builtin for the epoch, and adding
+      // `date` would double the spawn cost of every tool call. The file's own
+      // mtime is the same instant, measured by the kernel.
+      ts: statSync(file).mtimeMs,
       toolName: d.toolName,
       summary: d.summary.slice(0, MAX_SUMMARY),
     }
