@@ -4181,3 +4181,245 @@ git commit -m "feat: 一鍵 resume 與 helm open 指令"
 - **P5**：PR 追蹤（`gh` 包裝與 `waitingOn` 判定）。`CacheShape.prs` 欄位已預留。
 
 **刻意延後的一項設計**：規格 §5.1 定義了正式的 `AgentAdapter` 介面。本 plan **不**建立它 —— 只有一個 adapter 時，抽象介面是憑空猜測而非歸納。Task 3 的 `discoverClaudeCode` 已遵守該介面的效能契約（不讀 transcript、不發網路請求），Task 7 的 `readTranscriptDigest` 對應 `readSemantics`，Task 10 的 `buildResumeCommand` 對應 `buildResumeCommand`。P4 加入 Codex 時，介面從這兩個實作歸納出來，會比現在猜的準確。
+
+---
+
+## Task 11: 註冊表未知狀態值與降級可見性（P1 缺陷修正）
+
+Task 6 的真實資料驗收發現一個會讓使用者**默默少看到一個 session** 的缺陷。這是 P1 的核心承諾（不遺漏）被打破，優先於 P2 的任何工作。
+
+**實測證據**（2026-08-11，本機七個註冊表檔）：
+
+```
+status   kind         cwd
+shell    interactive  /Users/you/project-alpha     ← 完全不出現在 helm status
+idle     interactive  /Users/you/Projects/project-bravo
+idle     interactive  /Users/you/acme/report-tool
+busy     interactive  /Users/you/acme/example-service
+...
+```
+
+`status: "shell"` 是 Claude Code 的第三種原生狀態值。Task 2 的 schema 寫 `z.enum(['busy','idle'])`，遇到它整個 `safeParse` 失敗，該 session 被計入 `invalid` 並丟棄。
+
+**兩個獨立的問題，都要修**：
+
+1. **`.passthrough()` 只容忍未知欄位，不容忍已宣告欄位的未知值。** 上游新增一個狀態值就讓整筆 session 消失，這與「邊界驗證要容忍上游演進」的設計意圖矛盾。
+2. **`invalid` 計數從來沒有出口。** `discoverClaudeCode` 用 `const { entries } = readRegistry(...)` 就地丟棄它，所以任何解析失敗都是完全靜默的 —— 直接違反 Global Constraints 的「降級必須可見」。這是比第 1 點更嚴重的問題：修好 `shell` 之後，下一個未知格式仍會靜默吃掉 session。
+
+**Files:**
+- Modify: `src/adapters/claude-code/registry.ts`, `src/adapters/claude-code/registry.test.ts`
+- Modify: `src/adapters/claude-code/discover.ts`, `src/adapters/claude-code/discover.test.ts`
+- Modify: `src/cli/status.ts`, `src/cli/status.test.ts`
+- Modify: `src/render/table.ts`, `src/render/table.test.ts`
+
+**Interfaces:**
+- Changed: `discoverClaudeCode(paths: HelmPaths): DiscoverResult`（原本回傳 `DiscoveredSession[]`）
+- Changed: `collectStatus(paths, nowMs, probe?): StatusResult`（原本回傳 `ProjectView[]`）
+- Changed: `renderTable(result: StatusResult, opts: RenderOptions): string`（原本第一參數是 `readonly ProjectView[]`）
+- New: `interface DiscoverResult { sessions: DiscoveredSession[]; invalid: number }`
+- New: `interface StatusResult { projects: ProjectView[]; invalid: number }`
+
+- [ ] **Step 1: 寫 registry 容忍未知狀態值的失敗測試**
+
+追加到 `src/adapters/claude-code/registry.test.ts`：
+
+```ts
+test('未知的 status 值降級為 null，不丟棄整筆 session', () => {
+  const shellStatus = JSON.stringify({ ...JSON.parse(VALID), status: 'shell' })
+  const dir = makeDir({ '60907.json': shellStatus })
+  const { entries, invalid } = readRegistry(dir)
+  assert.equal(entries.length, 1, '整筆 session 不該因為未知狀態值而消失')
+  assert.equal(invalid, 0)
+  assert.equal(entries[0]?.status, null)
+  assert.equal(entries[0]?.sessionId, 'f9810d2c-4c2c-474b-9dc9-05f0707a526f')
+})
+
+test('status 是非字串型別時同樣降級為 null 而非丟棄', () => {
+  const dir = makeDir({ '1.json': JSON.stringify({ ...JSON.parse(VALID), status: 42 }) })
+  const { entries, invalid } = readRegistry(dir)
+  assert.equal(entries.length, 1)
+  assert.equal(invalid, 0)
+  assert.equal(entries[0]?.status, null)
+})
+```
+
+- [ ] **Step 2: 執行測試確認失敗**
+
+Run: `node --test src/adapters/claude-code/registry.test.ts`
+Expected: 兩個新測試 FAIL，`entries.length` 為 0、`invalid` 為 1 —— 正是缺陷本身。
+
+- [ ] **Step 3: 修正 schema**
+
+`src/adapters/claude-code/registry.ts` 的 `status` 欄位改為：
+
+```ts
+  // Unknown status values must not discard the whole session. `.passthrough()`
+  // tolerates unknown *fields*; this tolerates unknown *values* of a known
+  // field. Claude Code already ships a third value ("shell") beyond the two
+  // we model, and will add more.
+  status: z.unknown()
+    .transform((v) => (v === 'busy' || v === 'idle' ? v : null))
+    .pipe(z.enum(['busy', 'idle']).nullable()),
+```
+
+`NativeStatus` 型別與所有下游都不需要改 —— `statusOf` 已經把 `nativeStatus !== 'busy'` 一律當成 idle。
+
+- [ ] **Step 4: 執行測試確認通過**
+
+Run: `node --test src/adapters/claude-code/registry.test.ts`
+Expected: PASS，9 個測試全過（原 7 + 新 2）
+
+- [ ] **Step 5: 對真實資料驗證那個消失的 session 回來了**
+
+Run:
+```bash
+node --input-type=module -e "
+import { readRegistry } from './src/adapters/claude-code/registry.ts'
+import { resolvePaths } from './src/paths.ts'
+const r = readRegistry(resolvePaths().claudeSessions)
+console.log('有效:', r.entries.length, '無效:', r.invalid)
+for (const e of r.entries) console.log(' ', String(e.status), e.cwd)
+"
+```
+Expected: 有效數比修正前多一筆，無效為 0，且清單中出現 `null /Users/you/project-alpha`。
+
+- [ ] **Step 6: 寫 invalid 計數貫穿到輸出的失敗測試**
+
+追加到 `src/adapters/claude-code/discover.test.ts`：
+
+```ts
+test('discoverClaudeCode 回傳 invalid 計數而不是丟棄它', () => {
+  const home = scaffold([BASE])
+  writeFileSync(join(home, '.claude', 'sessions', 'broken.json'), '{壞掉')
+  const result = discoverClaudeCode(resolvePaths({ home }))
+  assert.equal(result.sessions.length, 1)
+  assert.equal(result.invalid, 1)
+})
+```
+
+追加到 `src/render/table.test.ts`：
+
+```ts
+test('有解析失敗時在輸出中明講，不靜默隱藏', () => {
+  const out = renderTable({ projects: [proj({})], invalid: 2 }, opts)
+  assert.match(out, /2 個/)
+  assert.match(out, /無法解析|讀不到|helm doctor/)
+})
+
+test('沒有解析失敗時不顯示任何警告', () => {
+  const out = renderTable({ projects: [proj({})], invalid: 0 }, opts)
+  assert.ok(!out.includes('無法解析'))
+})
+
+test('全部都解析失敗時，空清單訊息也要說明原因', () => {
+  const out = renderTable({ projects: [], invalid: 3 }, opts)
+  assert.match(out, /3 個/)
+})
+```
+
+- [ ] **Step 7: 執行測試確認失敗**
+
+Run: `node --test src/adapters/claude-code/discover.test.ts src/render/table.test.ts`
+Expected: FAIL —— `discoverClaudeCode` 目前回傳陣列沒有 `.sessions`，`renderTable` 目前第一參數是陣列。
+
+- [ ] **Step 8: 讓 invalid 貫穿三層**
+
+`discover.ts`：
+
+```ts
+export interface DiscoverResult {
+  sessions: DiscoveredSession[]
+  /** Registry files that existed but could not be parsed. Surfaced to the user. */
+  invalid: number
+}
+
+export function discoverClaudeCode(paths: HelmPaths): DiscoverResult {
+  const { entries, invalid } = readRegistry(paths.claudeSessions)
+  const sessions = entries
+    .map((e): DiscoveredSession => ({ /* 不變 */ }))
+    .toSorted((a, b) => b.updatedAt - a.updatedAt)
+  return { sessions, invalid }
+}
+```
+
+`src/cli/status.ts`：
+
+```ts
+export interface StatusResult {
+  projects: ProjectView[]
+  invalid: number
+}
+
+export function collectStatus(
+  paths: HelmPaths,
+  nowMs: number,
+  probe: ProcessProbe = queryProcesses,
+): StatusResult {
+  const { sessions, invalid } = discoverClaudeCode(paths)
+  const alive = probe(sessions.flatMap((d) => (d.pid === null ? [] : [d.pid])))
+  const states = reconcileSessions(sessions, {
+    alive,
+    readLive: (id) => readLiveMarker(paths.helmLive, id),
+    transcriptMtimeMs: mtimeMs,
+  })
+  const projects = groupIntoProjects(states, { /* 不變 */ })
+  return { projects, invalid }
+}
+```
+
+`runStatus` 的 JSON 分支直接輸出整個 `StatusResult`；表格分支把它傳給 `renderTable`。
+
+`src/render/table.ts`：
+
+```ts
+export function renderTable(result: StatusResult, opts: RenderOptions): string {
+  const { projects, invalid } = result
+  const warning = renderInvalidWarning(invalid, opts)
+  if (projects.length === 0) {
+    return `沒有找到符合條件的專案。\n（近 14 天內有活動、且是 git repo 的專案才會列出）\n${warning}`
+  }
+  const body = projects.map((p) => renderProject(p, opts)).join('\n\n')
+  return `${body}\n${renderSummary(projects)}\n${warning}`
+}
+
+/**
+ * Silent data loss is the worst failure mode for a board whose whole promise
+ * is "nothing gets forgotten". If a registry file could not be parsed, the
+ * user must be told a session is missing rather than shown a short list.
+ */
+function renderInvalidWarning(invalid: number, opts: RenderOptions): string {
+  if (invalid === 0) return ''
+  return dim(`\n⚠ 有 ${invalid} 個 session 記錄無法解析，未列於上方。執行 helm doctor 查看原因。\n`, opts.color)
+}
+```
+
+`renderTable` 的其餘呼叫端（`runStatus`）與所有既有測試都要改成傳 `StatusResult`。
+
+- [ ] **Step 9: 執行測試確認通過**
+
+Run: `bash scripts/check.sh`
+Expected: 型別檢查無誤、全部測試通過、覆蓋率維持 80% 以上。
+
+- [ ] **Step 10: 對真實資料驗收**
+
+Run: `node src/cli/main.ts status --no-color`
+Expected: `project-alpha` 出現在清單中（狀態顯示為等輸入，因為 `shell` 已降級為 null），專案數比修正前多一個，且沒有警告行（invalid 為 0）。
+
+Run:
+```bash
+cp ~/.claude/sessions/$(ls ~/.claude/sessions | head -1) /tmp/helm-backup.json
+echo '{壞掉' > ~/.claude/sessions/zzz-helm-test.json
+node src/cli/main.ts status --no-color | tail -3
+rm ~/.claude/sessions/zzz-helm-test.json
+```
+Expected: 輸出末尾出現「有 1 個 session 記錄無法解析」的警告。**測試後務必刪除那個假檔** —— 它在使用者真實的 Claude Code 目錄裡。
+
+- [ ] **Step 11: Commit**
+
+```bash
+git add src/adapters/claude-code/registry.ts src/adapters/claude-code/registry.test.ts \
+        src/adapters/claude-code/discover.ts src/adapters/claude-code/discover.test.ts \
+        src/cli/status.ts src/cli/status.test.ts \
+        src/render/table.ts src/render/table.test.ts
+git commit -m "fix: 未知的 registry 狀態值不再讓 session 消失，解析失敗改為可見"
+```
