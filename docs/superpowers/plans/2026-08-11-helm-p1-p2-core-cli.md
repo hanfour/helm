@@ -2436,7 +2436,19 @@ git commit -m "feat: 終端機表格輸出與 helm status 指令"
 - `type: 'assistant'`，`message.content` 是 block 陣列，`tool_use` block 含 `name` 與 `input`
 - 每筆 `user` 記錄另有 `timestamp`、`cwd`、`gitBranch`
 - 整份檔案 1451 筆 `tool_use`，但**純文字 user prompt 只有 224 筆**
-- 系統注入的內容會混在 user 訊息裡（例如以 `<task-notification>` 開頭），必須排除
+- 系統注入的內容會混在 user 訊息裡，必須排除。**判斷依據是記錄上的 `isMeta` 欄位，不是文字前綴。**
+
+**關於 `isMeta`（這是本 task 最關鍵的一件事）**：另一份 transcript 的實測顯示，僅用「以 `<` 開頭」當過濾規則會讓 **35% 的雜訊穿透** —— 圖片貼上時的自動 caption（`[Image: original 1080x2400, ...]`）與 skill 重新載入的注入訊息（`(Re-invocation of /superpowers:... )`、`Base directory for this skill: ...`）都不以 `<` 開頭。
+
+而 transcript 本身早就標好了。同一份檔案的實測：
+
+| 條件 | 筆數 | 內容性質 |
+|---|---|---|
+| `isMeta: true` | 80 | **全部**是合成內容，0 例外 |
+| `isMeta` 非 true 且不以 `<` 開頭 | 37 | **全部**是真人輸入（「實機測試」「不要用 project-foxtrot，用真實機器測試」…） |
+| `isMeta` 非 true 卻是合成內容 | **0** | 交叉檢查無誤判 |
+
+所以過濾規則是：**先排除 `isMeta === true` 的記錄**，再排除以 `<` 開頭的文字當作補強（涵蓋沒有 `isMeta` 標記的舊版格式）。單靠前綴猜測是不夠的。
 
 **Files:**
 - Create: `src/adapters/claude-code/transcript.ts`, `src/adapters/claude-code/transcript.test.ts`
@@ -2504,12 +2516,29 @@ test('排除 tool_result 內容，不當成使用者說的話', () => {
   assert.deepEqual(readTranscriptDigest(f).prompts, [])
 })
 
-test('排除系統注入的內容（task-notification 等尖括號開頭）', () => {
+test('排除 isMeta 標記的注入內容 —— 即使它不以尖括號開頭', () => {
+  // 實測：圖片 caption 與 skill 重載訊息都不以 < 開頭，只靠前綴會漏 35%
+  const f = jsonl([
+    { ...userText('[Image: original 1080x2400, displayed at 900x2000.]', '2026-08-11T01:00:00.000Z'), isMeta: true },
+    { ...userText('(Re-invocation of /superpowers:brainstorming)', '2026-08-11T01:30:00.000Z'), isMeta: true },
+    userText('實機測試', '2026-08-11T02:00:00.000Z'),
+  ])
+  assert.deepEqual(readTranscriptDigest(f).prompts, ['實機測試'])
+})
+
+test('尖括號規則作為補強，涵蓋沒有 isMeta 標記的舊格式', () => {
   const f = jsonl([
     userText('<task-notification><task-id>abc</task-id></task-notification>', '2026-08-11T01:00:00.000Z'),
     userText('真的使用者訊息', '2026-08-11T02:00:00.000Z'),
   ])
   assert.deepEqual(readTranscriptDigest(f).prompts, ['真的使用者訊息'])
+})
+
+test('isMeta 為 false 的內容照常保留', () => {
+  const f = jsonl([
+    { ...userText('這是我打的字', '2026-08-11T01:00:00.000Z'), isMeta: false },
+  ])
+  assert.deepEqual(readTranscriptDigest(f).prompts, ['這是我打的字'])
 })
 
 test('只保留最後 N 則 prompt', () => {
@@ -2590,6 +2619,39 @@ Expected: FAIL，找不到模組 `./transcript.ts`
 
 ```ts
 import { readFileSync } from 'node:fs'
+import { z } from 'zod'
+
+/**
+ * Transcript records are external input and go through zod like every other
+ * boundary in this project. The schemas are deliberately loose — `.passthrough()`
+ * and defaults everywhere — because Claude Code adds record types and fields
+ * between versions, and a stricter schema would silently drop history.
+ */
+const TextBlock = z.object({ type: z.literal('text'), text: z.string() })
+
+const ToolUseBlock = z.object({
+  type: z.literal('tool_use'),
+  name: z.string().default(''),
+  input: z.record(z.string(), z.unknown()).default({}),
+})
+
+/** Anything else (tool_result, image, …) is kept but carries no meaning here. */
+const OtherBlock = z.object({ type: z.string() }).passthrough()
+
+const ContentBlock = z.union([TextBlock, ToolUseBlock, OtherBlock])
+
+const RecordSchema = z.object({
+  type: z.string().default(''),
+  timestamp: z.string().optional(),
+  gitBranch: z.string().optional(),
+  /** Claude Code marks synthesized user content with this. See isHumanRecord. */
+  isMeta: z.boolean().optional(),
+  message: z.object({
+    content: z.union([z.string(), z.array(ContentBlock)]).optional(),
+  }).passthrough().optional(),
+}).passthrough()
+
+type TranscriptRecord = z.infer<typeof RecordSchema>
 
 export interface ToolCall {
   ts: number
@@ -2651,92 +2713,98 @@ export function readTranscriptDigest(
   }
 }
 
-function safeParse(line: string): Record<string, unknown> | null {
+function safeParse(line: string): TranscriptRecord | null {
   try {
-    const v: unknown = JSON.parse(line)
-    return typeof v === 'object' && v !== null ? (v as Record<string, unknown>) : null
+    const parsed = RecordSchema.safeParse(JSON.parse(line))
+    return parsed.success ? parsed.data : null
   } catch {
+    // Degrade, don't throw: one truncated or corrupt line must not cost the
+    // user the rest of their history. A partially-written last line is normal
+    // for a transcript belonging to a session that is still running.
     return null
   }
 }
 
-function absorb(a: TranscriptDigest, rec: Record<string, unknown>): TranscriptDigest {
-  const ts = parseTs(rec['timestamp'])
+function absorb(a: TranscriptDigest, rec: TranscriptRecord): TranscriptDigest {
+  const ts = parseTs(rec.timestamp)
   const withMeta: TranscriptDigest = {
     ...a,
     lastTs: ts ?? a.lastTs,
-    gitBranch: typeof rec['gitBranch'] === 'string' ? rec['gitBranch'] : a.gitBranch,
+    gitBranch: rec.gitBranch ?? a.gitBranch,
   }
-  if (rec['type'] === 'user') return absorbUser(withMeta, rec)
-  if (rec['type'] === 'assistant') return absorbAssistant(withMeta, rec, ts ?? 0)
+  if (rec.type === 'user') return absorbUser(withMeta, rec)
+  if (rec.type === 'assistant') return absorbAssistant(withMeta, rec, ts ?? 0)
   return withMeta
 }
 
-function absorbUser(a: TranscriptDigest, rec: Record<string, unknown>): TranscriptDigest {
-  const texts = userTexts(rec).filter(isHumanPrompt)
+function absorbUser(a: TranscriptDigest, rec: TranscriptRecord): TranscriptDigest {
+  if (!isHumanRecord(rec)) return a
+  const texts = userTexts(rec).filter(isHumanText)
   return texts.length === 0 ? a : { ...a, prompts: [...a.prompts, ...texts] }
 }
 
 function absorbAssistant(
   a: TranscriptDigest,
-  rec: Record<string, unknown>,
+  rec: TranscriptRecord,
   ts: number,
 ): TranscriptDigest {
   return blocks(rec).reduce((acc, b) => {
-    if (b['type'] !== 'tool_use') return acc
-    const name = typeof b['name'] === 'string' ? b['name'] : ''
-    const input = (b['input'] ?? {}) as Record<string, unknown>
-    const file = typeof input['file_path'] === 'string' ? input['file_path'] : null
+    if (b.type !== 'tool_use') return acc
+    const file = typeof b.input['file_path'] === 'string' ? b.input['file_path'] : null
     return {
       ...acc,
       touchedFiles:
-        FILE_TOOLS.has(name) && file !== null && !acc.touchedFiles.includes(file)
+        FILE_TOOLS.has(b.name) && file !== null && !acc.touchedFiles.includes(file)
           ? [...acc.touchedFiles, file]
           : acc.touchedFiles,
-      recentTools: [...acc.recentTools, { ts, name, summary: summarize(name, input) }],
+      recentTools: [...acc.recentTools, { ts, name: b.name, summary: summarize(b) }],
     }
   }, a)
 }
 
-function blocks(rec: Record<string, unknown>): Record<string, unknown>[] {
-  const msg = rec['message']
-  if (typeof msg !== 'object' || msg === null) return []
-  const content = (msg as Record<string, unknown>)['content']
-  return Array.isArray(content) ? (content as Record<string, unknown>[]) : []
+type ToolUse = z.infer<typeof ToolUseBlock>
+
+function blocks(rec: TranscriptRecord): ToolUse[] {
+  const content = rec.message?.content
+  if (!Array.isArray(content)) return []
+  return content.filter((b): b is ToolUse => b.type === 'tool_use')
 }
 
-function userTexts(rec: Record<string, unknown>): string[] {
-  const msg = rec['message']
-  if (typeof msg !== 'object' || msg === null) return []
-  const content = (msg as Record<string, unknown>)['content']
+function userTexts(rec: TranscriptRecord): string[] {
+  const content = rec.message?.content
   if (typeof content === 'string') return [content]
   if (!Array.isArray(content)) return []
-  return content.flatMap((b: unknown) => {
-    if (typeof b !== 'object' || b === null) return []
-    const block = b as Record<string, unknown>
-    return block['type'] === 'text' && typeof block['text'] === 'string'
-      ? [block['text']]
-      : []
-  })
+  return content.flatMap((b) => (b.type === 'text' ? [(b as { text: string }).text] : []))
 }
 
 /**
- * The transcript mixes real user typing with injected system content
- * (task notifications, reminders). Anything opening with a tag is not
- * something the user said.
+ * Claude Code sets `isMeta` on user records it synthesized itself — pasted
+ * image captions, skill re-invocation notices, and similar. Measured on a real
+ * transcript: all 80 isMeta records were synthetic and all 37 non-isMeta plain
+ * texts were genuine typing, with zero misclassifications either way. This is
+ * the reliable signal; the tag-prefix rule below is only a fallback.
  */
-function isHumanPrompt(text: string): boolean {
+function isHumanRecord(rec: TranscriptRecord): boolean {
+  return rec.isMeta !== true
+}
+
+/**
+ * Fallback for records that carry no `isMeta` marker (older transcript
+ * formats). Catches tag-wrapped injections like <task-notification>, but
+ * NOT caption-style ones — that is why isHumanRecord exists.
+ */
+function isHumanText(text: string): boolean {
   const t = text.trim()
   return t !== '' && !t.startsWith('<')
 }
 
-function summarize(name: string, input: Record<string, unknown>): string {
+function summarize(b: ToolUse): string {
   const raw =
-    name === 'Bash' && typeof input['command'] === 'string'
-      ? input['command']
-      : typeof input['file_path'] === 'string'
-        ? input['file_path']
-        : JSON.stringify(input)
+    b.name === 'Bash' && typeof b.input['command'] === 'string'
+      ? b.input['command']
+      : typeof b.input['file_path'] === 'string'
+        ? b.input['file_path']
+        : JSON.stringify(b.input)
   return raw.slice(0, MAX_SUMMARY)
 }
 
@@ -2769,7 +2837,37 @@ for (const p of d.prompts.slice(-3)) console.log('  -', p.slice(0, 80).replace(/
 console.log('最後的工具呼叫:', d.recentTools.map(t => t.name).join(', '))
 "
 ```
-Expected: `prompts` 為真正的人類語句（例如「目前狀況？」），**不含** `<task-notification>` 之類的注入內容。若混入了注入內容，`isHumanPrompt` 需要補規則。
+Expected: `prompts` 的**每一筆**都是真人打的字。
+
+**這一步要逐筆看完全部 20 筆，不是只看最後三筆。** 前一版的實作就是因為只抽查了尾巴，讓 35% 的雜訊矇混過關。以下任何一種出現在 `prompts` 裡都算失敗：
+
+- `[Image: original 1080x2400, ...]` —— 貼圖時的自動 caption
+- `(Re-invocation of /superpowers:... )` —— skill 重新載入的注入
+- `Base directory for this skill: ...`
+- 任何看起來像機器產生的中繼資訊
+
+再跑一次交叉檢查，確認過濾器沒有反過來把真人輸入也濾掉：
+
+```bash
+node --input-type=module -e "
+import { readFileSync } from 'node:fs'
+import { execSync } from 'node:child_process'
+const f = execSync(\"ls -S \$HOME/.claude/projects/*/*.jsonl | head -1\").toString().trim()
+let meta = 0, human = 0
+for (const line of readFileSync(f, 'utf8').split('\n')) {
+  if (!line.trim()) continue
+  let d; try { d = JSON.parse(line) } catch { continue }
+  if (d.type !== 'user') continue
+  const c = d.message?.content
+  const texts = typeof c === 'string' ? [c]
+    : Array.isArray(c) ? c.filter(b => b?.type === 'text').map(b => b.text) : []
+  for (const _ of texts) d.isMeta === true ? meta++ : human++
+}
+console.log('isMeta 標記的:', meta, '| 未標記的:', human)
+"
+```
+
+Expected: 兩個數字相加約等於該檔的純文字 user 訊息總數，且 `prompts` 的長度不超過未標記的那個數字。
 
 - [ ] **Step 6: Commit**
 
