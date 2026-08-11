@@ -32,6 +32,9 @@ export function readRegistry(sessionsDir: string): RegistryReadResult {
   try {
     names = readdirSync(sessionsDir).filter((n) => n.endsWith('.json'))
   } catch {
+    // Degrade, don't throw: a missing or unreadable sessions directory just
+    // means "no Claude Code sessions to report" — it must never take down a
+    // status check the user is running mid-development.
     return { entries: [], invalid: 0 }
   }
 
@@ -63,6 +66,10 @@ function parseOne(file: string): RegistryEntry | null {
       updatedAt: d.updatedAt,
     }
   } catch {
+    // Degrade to null (counted as `invalid`), don't throw. Two things land
+    // here and both are expected: a genuinely corrupt file, and the benign
+    // race where Claude Code deletes the file between our readdirSync and
+    // readFileSync — which is exactly what it does on clean session exit.
     return null
   }
 }
