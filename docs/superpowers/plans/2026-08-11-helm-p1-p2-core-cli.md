@@ -4877,62 +4877,99 @@ git commit -m "fix: 一個壞 PID 不再讓整批存活性判定誤報為當機"
 
 ---
 
-## Task 13: 探索改以 transcript 為主 —— 目前看不到已結束的 session（最高優先）
+## Task 13: 看板改以專案為單位，探索改以 transcript 為主（最高優先）
 
-**這個缺陷讓產品無法滿足原始需求的一半。** 使用者要的是「重新開機**或**突然當機之後能接續」，目前只涵蓋後者。
+兩個缺陷其實是同一件事的兩面，必須一起修。
 
-**實測證據**（2026-08-11）：
+### 缺陷一：看不到已結束的 session
 
-```
-註冊表 ~/.claude/sessions/*.json      6 筆
-磁碟上的 transcript                2846 份
-近 3 天有活動但不在註冊表裡          30 份
-```
+**這讓產品無法滿足原始需求的一半。** 使用者要的是「重新開機**或**突然當機之後能接續」，目前只涵蓋後者。
 
-具體案例：`project-alpha` 的 session `19519d4f` 剛結束，transcript 8.6 MB 完整保留，但
+實測（2026-08-11）：註冊表 `~/.claude/sessions/*.json` 只有 **6 筆**，磁碟上有 **2846 份** transcript，近 3 天有活動卻不在註冊表的有 **30 份**。具體案例：`project-alpha` 的 session `19519d4f` 剛結束、transcript 8.6 MB 完整保留，但 `helm status` 看不到、`helm brief 19519d4f` 回「找不到」。
 
-```
-$ helm status | grep project-alpha      → 看不到
-$ helm brief 19519d4f                      → 找不到符合 "19519d4f" 的 session
-```
+根因是 `discoverClaudeCode` 只列舉註冊表。而 §4.1 已實測確立「Claude Code 正常結束時會刪除註冊表檔」—— 正常重開機時所有 session 都收到 SIGTERM 正常結束，**註冊表全空，看板一片空白**。
 
-**根因**：`discoverClaudeCode` 只列舉註冊表。而 §4.1 已實測確立「Claude Code 正常結束時會刪除註冊表檔」—— 正常重開機時所有 session 都收到 SIGTERM 正常結束，於是**註冊表全空，看板一片空白**。當機時檔案殘留才看得到紅點。
+### 缺陷二：粒度錯了
 
-換句話說，helm 現在只在「非正常結束」時有用，而使用者明確要求兩種都要。
+修好缺陷一之後，看板會從 6 筆變成 **158 筆**。而使用者的第一個痛點正是「找不到正確的 session 可以 resume」—— 給他一份 158 筆的 session 清單，只是把 `claude --resume` 的問題換個地方重現。
 
-**設計調整**：探索的主要來源改為 transcript，註冊表降為存活性的補充資訊。
+實測的規模對比：
 
-- **transcript 是持久事實**：session 存在過、在哪個 cwd、最後活動時間
-- **註冊表是當下狀態**：還活著嗎、busy 還是 idle、PID 與 procStart
+| 單位 | 數量 |
+|---|---|
+| 近 14 天活躍專案 | 17（扣除 `/private/tmp`、`Downloads`、`var/folders` 等雜訊後 **12 個真專案**） |
+| 近 14 天 session | **158** |
+| 目前活著的 session | 6，分散在 4 個專案 |
 
-兩者以 `sessionId` join。註冊表有的，補上存活性；註冊表沒有的，就是已結束或當機的歷史 session。
+平均一個專案 9.3 個 session，`report-tool` 近期 25 個、總共 83 個。以 session 為單位的看板，98% 是歷史雜訊。
 
-**效能實測**（同一台機器）：靠目錄 mtime 先篩掉整個沒動過的專案，2846 份檔案只需要 stat 424 份。
+**「接續」本來就是專案層級的動作**：使用者想的是「回去繼續 data-svc 那件事」，不是「resume `f9810d2c`」。session id 是實作細節，不該是使用者介面。
+
+### 設計
+
+**探索**：transcript 是主要來源（持久事實：session 存在過、在哪個 cwd、最後活動時間），註冊表降為補充（當下狀態：還活著嗎、busy/idle、PID 與 procStart）。兩者以 `sessionId` join。
+
+**效能已實測可行**：靠目錄 mtime 先篩掉整個沒動過的專案，2846 份檔案只需 stat 424 份。
 
 ```
 目錄數 27 → 需 stat 424 檔 → 近 14 天有活動 158 個 → 耗時 8.2 ms
 ```
 
-效能契約是 200ms，餘裕充足。**不得讀取 transcript 內容，只 stat**。
+契約是 200ms，餘裕充足。**不得讀取 transcript 內容，只 stat**。
 
-**一併要解決的顯示問題**：近 14 天有 158 個 session，全列出來看板會爆炸。需要每個專案的 session 數上限（建議預設 3，`--all` 顯示全部），優先保留 `crashed` 與 `running`，其餘按最後活動時間取最近的。
+**主視圖**：一個專案一行。
 
-**Lifecycle 判定的影響**：§6 的真值表第 4、5 列本來就涵蓋「註冊表不存在」的情況，靠 live 檔與 transcript 時間戳判斷。但 P3 的 hook 尚未實作，所以現階段所有註冊表外的 session 都會落到「無 live 檔 → `ended_clean`」那一列，顯示為灰點。這是誠實的：沒有 hook 就沒有證據區分「正常結束」與「當機」，不該猜。P3 完成後這些會自動獲得正確判定。
+```
+● data-svc-2.0       2 分鐘前   1 個在跑              13 個 session
+○ report-tool       1 小時前   1 個等輸入            25 個 session
+● project-alpha    1 小時前   1 個中斷未回收        21 個 session
+  TokenSvc            5 小時前                         19 個 session
+```
 
-**Files:**
+專案的狀態圓點是其下所有 session 的聚合，優先序：**有 crashed → 紅；有 busy → 綠實心；有 idle → 綠空心；全部結束 → 無圓點（不是灰點，減少視覺噪音）**。
+
+**`helm sessions <專案>`** 展開該專案的 session 列表，沿用現有的 session 層級呈現。
+
+**`helm open` 與 `helm brief` 兩種參數都接**：專案名或 session id 前綴，自動判斷。專案名優先比對，因為那是主要用法。
+
+### 名稱解析
+
+專案以 `basename` 比對，大小寫不敏感，支援部分比對（`data-svc` 要能找到 `data-svc-2.0`）。歧義時**不要猜** —— 例如 `data-svc` 同時符合 `data-svc-2.0` 與 `data-svc-2.0-clone`，此時列出候選讓使用者選，並提示可用更長的字串。
+
+session id 前綴的比對維持現狀。判斷順序：先試專案名，無結果再試 session id 前綴。
+
+**多個活著的 session**：使用者會同時在一個專案開多個 CLI。`helm open <專案>` 若發現該專案有超過一個活著的 session，列出來讓他選，不要自動挑。只有一個時直接開。
+
+### Files
+
 - Modify: `src/adapters/claude-code/discover.ts` 與其測試
-- Modify: `src/render/table.ts` 與其測試（session 數上限）
-- Modify: `src/cli/status.ts`、`src/cli/main.ts`（`--all` 旗標）
+- Create: `src/projects/resolve.ts` 與其測試（名稱解析，純函式）
+- Modify: `src/projects/group.ts` 與其測試（專案層級的狀態聚合）
+- Modify: `src/render/table.ts` 與其測試（一專案一行）
+- Create: `src/render/sessions.ts` 與其測試（`helm sessions` 的展開視圖）
+- Modify: `src/cli/status.ts`、`src/cli/brief.ts`、`src/cli/open.ts`、`src/cli/main.ts`
 
-**Interfaces:**
-- 新增 `interface DiscoverOptions { windowDays: number; nowMs: number }`
+### Interfaces
+
+- `interface DiscoverOptions { windowDays: number; nowMs: number }`
 - `discoverClaudeCode(paths: HelmPaths, opts: DiscoverOptions): DiscoverResult`
-- `renderTable` 的 `RenderOptions` 新增 `maxSessionsPerProject: number | null`（null 表示不限）
+- `ProjectView` 新增 `aggregateStatus: StatusKey | null`（null 表示全部結束）與 `sessionCount: number`
+- `resolveTarget(projects: readonly ProjectView[], query: string): ResolveResult`
+- `type ResolveResult = { kind: 'project'; project: ProjectView } | { kind: 'session'; session: SessionState } | { kind: 'ambiguous'; candidates: string[] } | { kind: 'notfound' }`
+- `renderTable` 改為一專案一行；session 層級的呈現移到 `renderSessions`
 
-**驗收（這是本 task 的重點，不可略過）**：
+### 驗收（重點，不可略過）
 
-1. `helm status` 必須列出 `project-alpha` 的 `19519d4f`，即使它不在註冊表
-2. `helm brief 19519d4f` 必須找得到並產生簡報
-3. 仍在註冊表裡的 session 必須保留正確的 busy/idle 與紅點判定 —— 不可因為改用 transcript 探索而退化
-4. `helm status` 的執行時間必須仍在 200ms 內（用 `time` 量測並貼進報告）
-5. 看板不得因為 158 個 session 而變得無法閱讀
+1. `helm status` 列出 12 個左右的專案，**一個專案一行**，含 `project-alpha`（它不在註冊表裡）
+2. `helm sessions project-alpha` 展開得到該專案的 session 列表
+3. `helm brief project-alpha` 找得到並產生簡報
+4. `helm open data-svc` 在歧義時列出 `data-svc-2.0` 與 `data-svc-2.0-clone` 讓使用者選，**不自動挑**
+5. 仍在註冊表裡的 session 保留正確的 busy/idle 與紅點判定，不因改用 transcript 探索而退化
+6. `time helm status` 仍在 200ms 內，數字貼進報告
+7. 雜訊路徑（`/private/tmp`、`Downloads`、`var/folders`）仍被排除
+
+### 一個誠實的限制
+
+P3 的 hook 尚未實作，所以註冊表之外的歷史 session 沒有 live 檔可比對，一律落到 §6 真值表的「無 live 檔 → `ended_clean`」那一列。這是刻意的：**沒有證據就不該猜是當機**。因此重開機後看到的多半是「已結束」而非紅點，紅點只會出現在真正的異常中斷（註冊表殘留）。P3 完成後，這些歷史 session 會自動獲得正確的判定。
+
+實務上這仍然解決了使用者的核心問題：重開機後他看得到 12 個專案、各自最後做到哪，並且能對任何一個要簡報與接續 —— 不再需要正確猜出 session id。
