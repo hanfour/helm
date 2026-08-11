@@ -2209,3 +2209,53 @@ export function readPrefsOf(home: string): PrefsFile {
 **規格中屬 P3 但本計畫不做的**，理由已列於「明確不做的事」：§4.4 stale-while-revalidate。
 
 **已知的 P2 規格缺口（不屬本期，但記錄下來以免遺忘）**：§11.3 要求 `helm brief` 預設以 `$PAGER` 顯示、並提供 `--open` 寫入暫存 HTML 以瀏覽器開啟。P2 實作為直接寫 stdout，兩者皆未做。這不影響 P3，但最終全分支 review 時應一併裁決是補做還是修改規格。
+
+---
+
+## 實作後記：偏離計畫之處（2026-08-11）
+
+計畫寫於全分支 review 之前，中間 review 修掉的東西改變了幾個前提。逐項記錄：
+
+### Task 1
+- **無偏離。** hook 腳本與計畫的原型一致，實測 6.31 ms（純 spawn 下限 5.77 ms），
+  `snippet.ts` 行／分支／函式覆蓋率皆 100%。
+- 舊測試「`ts` 取自檔案內容」是刻意改掉的行為，已更新並在測試裡註明理由。
+
+### Task 2
+- `readSettings` 的「無法解析」哨兵從字串 `'unparseable'` 改為 `Symbol` ——
+  字串哨兵與合法的 JSON 字串值無法區分。
+- `writeJsonAtomic`：計畫直接 `writeFileSync`，改為先寫暫存再 rename。
+  就地截斷若寫到一半當掉，使用者會拿到半份 settings.json 與一個啟動不了的
+  Claude Code。
+- `installHook` 多一道檢查：`addHelmHook` 後若 `hasHelmHook` 仍為 false，
+  代表 `hooks` 欄位不是預期形狀，中止並說明，而不是回報成功卻什麼也沒裝。
+- `InstallDeps` 多一個 `swiftbarInstalled?`，讓 SwiftBar 的兩條分支在任何機器上
+  都測得到。
+- **附錄 A 的 scaffold 做成一份共用的**（`SessionSpec` 支援 `pid`／`status`／
+  `procStart`／`content`），三個既有 CLI 測試檔已遷移。
+
+### Task 3
+- `runChecks(paths, board, nowMs)` 拿掉沒用到的 `nowMs`。
+- **多一項「偏好檔」檢查**：全分支 review 的 #6 之後 `Board` 才有 `prefsCorrupt`，
+  計畫寫的時候還不存在，而 doctor 是它的自然歸屬。
+- 清理規則多守一條：**中斷（crashed）的 session 的 live 檔也不清**。計畫只寫了
+  「ended_clean 或超過 30 天」，但 crashed 的 live 檔正是它中斷的證據。
+
+### Task 4
+- `readPrefs` 在 review #6 之後回傳 `{ prefs, corrupt }` 而非 `PrefsFile`，
+  計畫的程式碼片段據此調整。
+- **毀損時先警告再寫**：原檔已被隔離保存，但這次寫出的是全新的檔案，先前的
+  釘選與隱藏不會自動帶過來 —— 不講清楚使用者會以為設定一直都在。
+- `resolveHidden` 的比對同時看 basename 與完整路徑（與 review #5 對
+  `resolveTarget` 的修正保持一致，否則列出路徑卻貼不回去）。
+
+### Task 5
+- **多一列偏好檔毀損的警告**，理由同 Task 3。
+- 警告列的「看原因」子項改為兩種警告共用一個，避免重複。
+
+### 仍未執行
+- **尚未對使用者真實的 `~/.claude/settings.json` 執行 `helm install`。** 那會改動
+  使用者的實際設定，且之後每次工具呼叫多 6.3 ms（每 turn 約 15 次 ≈ 95 ms）。
+- **SwiftBar 仍未安裝**，因此選單列本身尚未實際跑起來過。
+- 兩者都需要使用者決定。在此之前，`helm menu` 的輸出格式、效能契約與所有分支
+  邏輯都已由測試與真實資料驗證過（真實機器 `collectStatus` 57–63 ms）。
