@@ -1,26 +1,13 @@
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { runOpen } from './open.ts'
+import { captureAsync, scaffoldHome, SCRATCH, type SessionSpec } from './test-helpers.ts'
 import type { LaunchDeps } from '../launch/run.ts'
 import { parseLstart, queryProcesses } from '../adapters/claude-code/processes.ts'
 
-/**
- * Fixtures cannot live in the OS temp dir: include.ts excludes /tmp and
- * /var/folders as noise, so the project would never be listed. Namespaced by
- * pid because `node --test` runs files as separate processes.
- */
-const SCRATCH_ROOT = fileURLToPath(
-  new URL(`../../.test-scratch/${process.pid}-open/`, import.meta.url),
-)
-mkdirSync(SCRATCH_ROOT, { recursive: true })
-after(() => {
-  rmSync(SCRATCH_ROOT, { recursive: true, force: true })
-})
-
-const slugify = (p: string) => p.replace(/[^a-zA-Z0-9]/g, '-')
+after(SCRATCH.cleanup)
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
@@ -41,38 +28,11 @@ function registryProcStart(pid: number): string {
          `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())} ${d.getUTCFullYear()}`
 }
 
-interface SessionSpec {
-  id: string
-  /** Present means the session is still running (a registry file exists). */
-  pid?: number
-  status?: 'busy' | 'idle'
-}
+const live = (id: string, pid: number, status: 'busy' | 'idle'): SessionSpec =>
+  ({ id, pid, status, procStart: registryProcStart(pid) })
 
-/** A home with one git project holding the given sessions. */
-function scaffold(projectName: string, sessions: readonly SessionSpec[]): string {
-  const home = mkdtempSync(join(SCRATCH_ROOT, 'home-'))
-  const cwd = join(home, projectName)
-  mkdirSync(join(cwd, '.git'), { recursive: true })
-  const dir = join(home, '.claude', 'projects', slugify(cwd))
-  mkdirSync(dir, { recursive: true })
-  mkdirSync(join(home, '.claude', 'sessions'), { recursive: true })
-  for (const s of sessions) {
-    writeFileSync(
-      join(dir, `${s.id}.jsonl`),
-      `${JSON.stringify({ type: 'user', message: { role: 'user', content: '做一件事' } })}\n`,
-    )
-    if (s.pid === undefined) continue
-    writeFileSync(
-      join(home, '.claude', 'sessions', `${s.pid}.json`),
-      JSON.stringify({
-        pid: s.pid, sessionId: s.id, cwd, startedAt: Date.now(),
-        procStart: registryProcStart(s.pid), kind: 'interactive', name: '',
-        status: s.status ?? 'idle', updatedAt: Date.now(),
-      }),
-    )
-  }
-  return home
-}
+const scaffold = (project: string, sessions: readonly SessionSpec[]) =>
+  scaffoldHome([{ project, sessions }])
 
 interface Captured {
   code: number
@@ -87,40 +47,25 @@ async function run(
   argv: readonly string[],
   over: { launch?: () => LaunchDeps; brief?: string; onRun?: () => void } = {},
 ): Promise<Captured> {
-  const outs: string[] = []
-  const errs: string[] = []
   const scripts: string[] = []
-  const realOut = process.stdout.write.bind(process.stdout)
-  const realErr = process.stderr.write.bind(process.stderr)
-  const previous = process.env['HELM_FAKE_HOME']
-  process.stdout.write = ((c: string) => (outs.push(String(c)), true)) as typeof process.stdout.write
-  process.stderr.write = ((c: string) => (errs.push(String(c)), true)) as typeof process.stderr.write
-  process.env['HELM_FAKE_HOME'] = home
-  try {
-    const code = await runOpen(argv, {
-      run: async () => {
-        over.onRun?.()
-        return over.brief ?? JSON.stringify({
-          goal: '修好匯出', done: [], currentStep: '', nextStep: '補測試',
-          blockers: [], files: [], prs: [],
-        })
-      },
-      launch: over.launch ?? (() => ({
-        term: 'terminal',
-        runOsascript: (s: string) => void scripts.push(s),
-      })),
-    })
-    return { code, out: outs.join(''), err: errs.join(''), scripts }
-  } finally {
-    process.stdout.write = realOut
-    process.stderr.write = realErr
-    if (previous === undefined) delete process.env['HELM_FAKE_HOME']
-    else process.env['HELM_FAKE_HOME'] = previous
-  }
+  const captured = await captureAsync(home, () => runOpen(argv, {
+    run: async () => {
+      over.onRun?.()
+      return over.brief ?? JSON.stringify({
+        goal: '修好匯出', done: [], currentStep: '', nextStep: '補測試',
+        blockers: [], files: [], prs: [],
+      })
+    },
+    launch: over.launch ?? (() => ({
+      term: 'terminal',
+      runOsascript: (s: string) => void scripts.push(s),
+    })),
+  }))
+  return { ...captured, scripts }
 }
 
-const A = 'aaaa1111-0000-0000-0000-000000000000'
-const B = 'bbbb2222-0000-0000-0000-000000000000'
+const A = 'aaaa1111-0000-1111-2222-333344445555'
+const B = 'bbbb2222-0000-1111-2222-333344445555'
 
 test('沒給目標時印出用法並回傳 2', async () => {
   const r = await run(scaffold('proj', [{ id: A }]), [])
@@ -169,8 +114,7 @@ test('--no-brief 時開場訊息不得指向任何簡報檔', async () => {
   // 沒寫簡報卻叫 session 去讀那個路徑：檔案不存在時是一句無意義的指令，
   // 檔案存在時更糟 —— 那是上一次 helm open 留下的舊簡報，Claude 會照著
   // 一份過期的計畫接續，而且沒有任何跡象顯示它過期了。
-  const home = scaffold('proj', [{ id: A }])
-  const r = await run(home, ['proj', '--no-brief'])
+  const r = await run(scaffold('proj', [{ id: A }]), ['proj', '--no-brief'])
   assert.equal(r.code, 0)
   const script = r.scripts[0] ?? ''
   assert.ok(!script.includes('.md'), `開場訊息不該提到簡報檔：${script}`)
@@ -187,16 +131,12 @@ test('--no-brief 時即使磁碟上有舊簡報也不指向它', async () => {
 })
 
 test('--no-brief 時輸出不宣稱簡報已產生', async () => {
-  const home = scaffold('proj', [{ id: A }])
-  const r = await run(home, ['proj', '--no-brief'])
+  const r = await run(scaffold('proj', [{ id: A }]), ['proj', '--no-brief'])
   assert.ok(!r.out.includes('簡報'), `不該提簡報：${r.out}`)
 })
 
 test('專案底下有多個還在跑的 session 時列出來讓使用者選，不自動挑', async () => {
-  const home = scaffold('proj', [
-    { id: A, pid: process.pid, status: 'busy' },
-    { id: B, pid: process.ppid, status: 'idle' },
-  ])
+  const home = scaffold('proj', [live(A, process.pid, 'busy'), live(B, process.ppid, 'idle')])
   const r = await run(home, ['proj'])
   assert.equal(r.code, 1)
   assert.deepEqual(r.scripts, [], '不確定要開哪一個時，什麼都不該開')
@@ -205,32 +145,27 @@ test('專案底下有多個還在跑的 session 時列出來讓使用者選，�
 })
 
 test('只有一個在跑時直接開它，不打擾使用者', async () => {
-  const home = scaffold('proj', [{ id: A, pid: process.pid, status: 'busy' }, { id: B }])
+  const home = scaffold('proj', [live(A, process.pid, 'busy'), { id: B }])
   const r = await run(home, ['proj'])
   assert.equal(r.code, 0)
   assert.ok((r.scripts[0] ?? '').includes(A))
 })
 
 test('都沒在跑時接續最近的那個 —— 重開機後的主要用法', async () => {
-  const home = scaffold('proj', [{ id: A }, { id: B }])
-  const r = await run(home, ['proj'])
+  const r = await run(scaffold('proj', [{ id: A }, { id: B }]), ['proj'])
   assert.equal(r.code, 0)
   assert.equal(r.scripts.length, 1)
 })
 
 test('指名 session id 時就開那一個，不套用專案層級的規則', async () => {
-  const home = scaffold('proj', [
-    { id: A, pid: process.pid, status: 'busy' },
-    { id: B, pid: process.ppid, status: 'idle' },
-  ])
+  const home = scaffold('proj', [live(A, process.pid, 'busy'), live(B, process.ppid, 'idle')])
   const r = await run(home, ['bbbb2222'])
   assert.equal(r.code, 0)
   assert.ok((r.scripts[0] ?? '').includes(B))
 })
 
 test('開終端機失敗時回傳 1，並告訴使用者簡報在哪', async () => {
-  const home = scaffold('proj', [{ id: A }])
-  const r = await run(home, ['proj'], {
+  const r = await run(scaffold('proj', [{ id: A }]), ['proj'], {
     launch: () => ({
       term: 'terminal',
       runOsascript: () => {

@@ -24,3 +24,21 @@ test('resolvePaths 不修改傳入的 overrides 物件', () => {
   resolvePaths(overrides)
   assert.deepEqual(overrides, snapshot)
 })
+
+test('P3 新增的三個路徑都掛在正確的家目錄底下', () => {
+  const p = resolvePaths({ home: '/h' })
+  assert.equal(p.claudeSettings, '/h/.claude/settings.json')
+  assert.equal(p.hookErrorsLog, '/h/.helm/hook-errors.log')
+  assert.equal(p.backupsDir, '/h/.helm/backups')
+})
+
+test('claudeHome override 也會帶著 settings.json 走', () => {
+  assert.equal(resolvePaths({ home: '/h', claudeHome: '/c' }).claudeSettings, '/c/settings.json')
+})
+
+test('helmHome override 會帶著備份與錯誤紀錄走', () => {
+  const p = resolvePaths({ home: '/h', helmHome: '/custom' })
+  assert.equal(p.backupsDir, '/custom/backups')
+  assert.equal(p.hookErrorsLog, '/custom/hook-errors.log')
+  assert.equal(p.claudeSettings, '/h/.claude/settings.json')
+})

@@ -6,11 +6,14 @@ export interface HelmPaths {
   claudeHome: string
   claudeSessions: string
   claudeProjects: string
+  claudeSettings: string
   helmHome: string
   helmLive: string
   helmBriefs: string
   cacheFile: string
   prefsFile: string
+  hookErrorsLog: string
+  backupsDir: string
 }
 
 export interface PathOverrides {
@@ -29,10 +32,13 @@ export function resolvePaths(overrides: PathOverrides = {}): HelmPaths {
     claudeHome,
     claudeSessions: join(claudeHome, 'sessions'),
     claudeProjects: join(claudeHome, 'projects'),
+    claudeSettings: join(claudeHome, 'settings.json'),
     helmHome,
     helmLive: join(helmHome, 'live'),
     helmBriefs: join(helmHome, 'briefs'),
     cacheFile: join(helmHome, 'cache.json'),
     prefsFile: join(helmHome, 'projects.json'),
+    hookErrorsLog: join(helmHome, 'hook-errors.log'),
+    backupsDir: join(helmHome, 'backups'),
   }
 }
