@@ -587,7 +587,7 @@ git commit -m "feat: 共用型別與 Claude Code 註冊表讀取"
   - `parseLstart(s: string): number | null` — 把 `LC_ALL=C ps -o lstart=` 的本地時間字串轉 epoch ms
   - `procStartMatches(registryProcStart: string, psLstart: string): boolean`
   - `queryProcesses(pids: number[]): Map<number, string>` — pid → lstart 原始字串，死掉的 pid 不會出現在 map 中
-  - `discoverClaudeCode(paths: HelmPaths, probe?: ProcessProbe): DiscoveredSession[]`
+  - `discoverClaudeCode(paths: HelmPaths): DiscoveredSession[]`
   - `type ProcessProbe = (pids: number[]) => Map<number, string>`
 
 **背景（實測 2026-08-11，這是本 task 最容易做錯的地方）：**
@@ -829,7 +829,7 @@ const BASE = {
 
 test('探索出註冊表中的 session 並帶上 adapterId', () => {
   const home = scaffold([BASE])
-  const found = discoverClaudeCode(resolvePaths({ home }), () => new Map())
+  const found = discoverClaudeCode(resolvePaths({ home }))
   assert.equal(found.length, 1)
   assert.equal(found[0]?.adapterId, 'claude-code')
   assert.equal(found[0]?.sessionId, 'sess-a')
@@ -839,13 +839,13 @@ test('探索出註冊表中的 session 並帶上 adapterId', () => {
 test('找得到對應的 transcript 路徑', () => {
   const slug = '-Users-testuser-proj'
   const home = scaffold([BASE], [`${slug}/sess-a.jsonl`])
-  const found = discoverClaudeCode(resolvePaths({ home }), () => new Map())
+  const found = discoverClaudeCode(resolvePaths({ home }))
   assert.ok(found[0]?.transcriptPath?.endsWith(`${slug}/sess-a.jsonl`))
 })
 
 test('沒有對應 transcript 時 transcriptPath 為 null', () => {
   const home = scaffold([BASE])
-  const found = discoverClaudeCode(resolvePaths({ home }), () => new Map())
+  const found = discoverClaudeCode(resolvePaths({ home }))
   assert.equal(found[0]?.transcriptPath, null)
 })
 
@@ -854,7 +854,7 @@ test('探索結果依 updatedAt 由新到舊排序', () => {
     { ...BASE, pid: 1, sessionId: 'old', updatedAt: 1000 },
     { ...BASE, pid: 2, sessionId: 'new', updatedAt: 9000 },
   ])
-  const found = discoverClaudeCode(resolvePaths({ home }), () => new Map())
+  const found = discoverClaudeCode(resolvePaths({ home }))
   assert.deepEqual(found.map((f) => f.sessionId), ['new', 'old'])
 })
 
@@ -862,7 +862,7 @@ test('探索不修改傳入的 paths 物件', () => {
   const home = scaffold([BASE])
   const paths = resolvePaths({ home })
   const snapshot = { ...paths }
-  discoverClaudeCode(paths, () => new Map())
+  discoverClaudeCode(paths)
   assert.deepEqual(paths, snapshot)
 })
 ```
@@ -880,23 +880,22 @@ import { join } from 'node:path'
 import type { HelmPaths } from '../../paths.ts'
 import type { DiscoveredSession } from '../../types.ts'
 import { readRegistry } from './registry.ts'
-import { queryProcesses, type ProcessProbe } from './processes.ts'
 
 export const ADAPTER_ID = 'claude-code'
 
 /**
- * Fast path only: reads the registry directory and asks `ps` about the PIDs
- * it found. Must never read a transcript — `helm menu` calls this every
- * five seconds (spec §5.1).
+ * Fast path only: reads the registry directory and locates each session's
+ * transcript by path existence. Must never read a transcript's contents and
+ * must never spawn a subprocess — `helm menu` calls this every five seconds
+ * (spec §5.1).
  *
- * The probe is injectable so tests do not depend on live processes.
+ * Liveness deliberately does NOT belong here. Reconciliation (Task 4) needs
+ * one `ps` result for the whole session set, so `collectStatus` (Task 6)
+ * makes that single call and passes it down. Probing here as well would
+ * spawn `ps` twice per poll for no gain.
  */
-export function discoverClaudeCode(
-  paths: HelmPaths,
-  probe: ProcessProbe = queryProcesses,
-): DiscoveredSession[] {
+export function discoverClaudeCode(paths: HelmPaths): DiscoveredSession[] {
   const { entries } = readRegistry(paths.claudeSessions)
-  const alive = probe(entries.map((e) => e.pid))
 
   return entries
     .map((e): DiscoveredSession => ({
@@ -911,7 +910,6 @@ export function discoverClaudeCode(
       kind: e.kind,
       name: e.name,
       transcriptPath: findTranscript(paths.claudeProjects, e.cwd, e.sessionId),
-      // `alive` is consumed by reconcile (Task 4), not stored here.
     }))
     .toSorted((a, b) => b.updatedAt - a.updatedAt)
 }
@@ -2297,7 +2295,7 @@ export function collectStatus(
   nowMs: number,
   probe: ProcessProbe = queryProcesses,
 ): ProjectView[] {
-  const discovered = discoverClaudeCode(paths, probe)
+  const discovered = discoverClaudeCode(paths)
   const alive = probe(discovered.flatMap((d) => (d.pid === null ? [] : [d.pid])))
   const states = reconcileSessions(discovered, {
     alive,
