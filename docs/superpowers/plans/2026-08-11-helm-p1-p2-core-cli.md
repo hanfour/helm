@@ -3082,7 +3082,7 @@ const BriefSchema = z.object({
 const CacheSchema = z.object({
   version: z.literal(1),
   briefs: z.record(z.string(), z.object({
-    digest: z.string(),
+    digest: z.string().min(1),
     generatedAt: z.number(),
     body: BriefSchema,
   })).default({}),
@@ -3102,6 +3102,8 @@ export function readCache(cacheFile: string): CacheShape {
   try {
     raw = readFileSync(cacheFile, 'utf8')
   } catch {
+    // Degrade, don't throw: no cache file simply means nothing has been
+    // cached yet, which is the normal state on first run.
     return EMPTY_CACHE
   }
   const parsed = CacheSchema.safeParse(safeJson(raw))
@@ -3114,6 +3116,9 @@ function safeJson(raw: string): unknown {
   try {
     return JSON.parse(raw)
   } catch {
+    // Degrade to null so the caller can quarantine and rebuild. The cache is
+    // pure derived data — a truncated write (crash mid-save) must cost the
+    // user a regenerated brief, never a CLI that refuses to start.
     return null
   }
 }
@@ -3153,6 +3158,9 @@ export function digestOf(transcriptPath: string | null): string | null {
     const s = statSync(transcriptPath)
     return `${s.size}:${s.mtimeMs}`
   } catch {
+    // Degrade to null, which getFreshBrief treats as "cannot confirm
+    // freshness" and therefore never serves a cached brief. Failing closed
+    // costs one regeneration; failing open would show a stale brief.
     return null
   }
 }
