@@ -4744,7 +4744,12 @@ exit=1
 **Files:**
 - Modify: `src/adapters/claude-code/processes.ts`, `src/adapters/claude-code/processes.test.ts`
 
-**Interfaces:** 不變 —— `queryProcesses` 的簽章與回傳型別維持 `ProcessProbe`。
+**Interfaces:** `queryProcesses` 的簽章與回傳型別維持 `ProcessProbe`。
+
+**實作時補上**：多匯出一個 `createProbe(run: PsRunner): ProcessProbe` 與 `type PsRunner`。
+退回逐一查詢那條路正是整個修正的重點，但它只有在真的把 `ps` 弄壞時才走得到 ——
+留著不測，等於讓「防止整片誤報」這個唯一的保護措施沒有任何測試守著。
+`queryProcesses` 本身維持 `createProbe(runPs)`，呼叫端完全不受影響。
 
 - [ ] **Step 1: 寫失敗測試**
 
@@ -4816,17 +4821,17 @@ function runPs(pids: readonly number[]): Map<number, string> | null {
       'ps',
       ['-o', 'pid=,lstart=', '-p', pids.join(',')],
       { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' },
-        stdio: ['ignore', 'pipe', 'ignore'] },
+        stdio: ['ignore', 'pipe', 'pipe'] },
     )
     return parsePsOutput(out)
   } catch (err) {
-    // Exit status 1 with output means "ran fine, found none" — a real answer.
-    // Anything else means the call itself failed and we must not conclude
-    // the processes are gone.
-    const stdout = (err as { stdout?: string }).stdout
-    return typeof stdout === 'string' && stdout.trim() !== ''
-      ? parsePsOutput(stdout)
-      : null
+    const e = err as { status?: number | null; stdout?: string; stderr?: string }
+    const stdout = typeof e.stdout === 'string' ? e.stdout : ''
+    if (stdout.trim() !== '') return parsePsOutput(stdout)
+    const stderr = typeof e.stderr === 'string' ? e.stderr : ''
+    // `status` is null when the spawn never ran (ps missing, out of memory),
+    // which must not be read as "these processes are gone" either.
+    return typeof e.status === 'number' && stderr.trim() === '' ? new Map() : null
   }
 }
 
@@ -4841,7 +4846,19 @@ function parsePsOutput(out: string): Map<number, string> {
 }
 ```
 
-注意 `stdio` 把 stderr 設為 `'ignore'`，避免 `ps` 的錯誤訊息汙染使用者的終端機輸出 —— 實驗時那行 `ps: process id too large: 999999` 就是這樣漏出來的。
+注意 `stdio` 明確把 stderr 設為 `'pipe'`。`execFileSync` 預設會把子行程的 stderr 直接轉給父行程，那行 `ps: process id too large: 999999` 就是這樣漏到使用者的看板中間的。
+
+**實作時修正（原稿寫 `'ignore'`，改成 `'pipe'` 並據以判斷）**：`ps` 的兩種非零結束在 macOS 上是分得出來的，實測 2026-08-11：
+
+| 情境 | exit | stdout | stderr |
+|---|---|---|---|
+| PID 合法但不存在（3999、99999） | 1 | 空 | **空** |
+| PID 超出範圍（100000 以上） | 1 | 空 | `ps: process id too large: …` |
+| 混合批次中至少一個活著 | 0 | 有資料 | 空 |
+
+所以「stderr 是空的」就足以判定「跑成功、只是都不存在」，可以直接回空 Map，**不必退回逐一查詢**。這很重要：重開機後註冊表殘留的 PID 全數已死是常態，若一律退回逐一查詢，每次 `helm status` 都會多 spawn N 次 `ps`。真正需要退回的只剩「stderr 有訊息」與「spawn 根本沒跑起來」（`status` 為 null）這兩種。
+
+邊界也一併實測：**99999 可接受、100000 被拒**，故 `MAX_PID = 99_999` 正確。
 
 - [ ] **Step 4: 執行測試確認通過**
 
@@ -4865,6 +4882,20 @@ rm -rf "$FAKE"
 ```
 
 Expected: **只有**被改的那個專案顯示「已中斷」，其餘維持原本狀態；輸出中沒有 `ps:` 錯誤訊息。修正前跑同一段會看到全部都變成已中斷。
+
+**驗收結果（2026-08-11 實測，3 筆註冊表複本、11 個專案）**：
+
+```
+修正前（git stash 掉修正後重跑）      修正後
+ps: process id too large: 999999      （無錯誤訊息）
+● helm               1 個中斷未回收   ● helm               1 個在跑
+● project-echo          1 個中斷未回收   ● project-echo          1 個在跑
+● data-svc-2.0-clone 1 個中斷未回收  ● data-svc-2.0-clone 1 個中斷未回收  ← 唯一被竄改的
+```
+
+✅ 誤報消除、✅ stderr 不再汙染輸出、✅ 20 個測試全過（原 7 + 新 13），
+`processes.ts` 行覆蓋率 100%（含真實 `ps` 的「跑成功但都不存在」分支 ——
+用 `spawnSync('/usr/bin/true').pid` 取得一個確定剛死、PID 又確定在合法範圍內的行程）。
 
 - [ ] **Step 6: 全套件與 commit**
 
