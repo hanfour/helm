@@ -78,3 +78,21 @@ test('忽略非 .json 檔（例如 compaction-log.txt）', () => {
   const dir = makeDir({ 'a.json': VALID, 'compaction-log.txt': 'noise' })
   assert.equal(readRegistry(dir).entries.length, 1)
 })
+
+test('未知的 status 值降級為 null，不丟棄整筆 session', () => {
+  const shellStatus = JSON.stringify({ ...JSON.parse(VALID), status: 'shell' })
+  const dir = makeDir({ '60907.json': shellStatus })
+  const { entries, invalid } = readRegistry(dir)
+  assert.equal(entries.length, 1, '整筆 session 不該因為未知狀態值而消失')
+  assert.equal(invalid, 0)
+  assert.equal(entries[0]?.status, null)
+  assert.equal(entries[0]?.sessionId, 'f9810d2c-4c2c-474b-9dc9-05f0707a526f')
+})
+
+test('status 是非字串型別時同樣降級為 null 而非丟棄', () => {
+  const dir = makeDir({ '1.json': JSON.stringify({ ...JSON.parse(VALID), status: 42 }) })
+  const { entries, invalid } = readRegistry(dir)
+  assert.equal(entries.length, 1)
+  assert.equal(invalid, 0)
+  assert.equal(entries[0]?.status, null)
+})

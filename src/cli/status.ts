@@ -9,26 +9,33 @@ import { reconcileSessions } from '../reconcile/lifecycle.ts'
 import { readLiveMarker } from '../reconcile/live.ts'
 import { renderTable } from '../render/table.ts'
 
+export interface StatusResult {
+  projects: ProjectView[]
+  /** Registry files that existed but could not be parsed. Surfaced to the user. */
+  invalid: number
+}
+
 /** Fast path: no transcript parsing, no network, no LLM (spec 5.1). */
 export function collectStatus(
   paths: HelmPaths,
   nowMs: number,
   probe: ProcessProbe = queryProcesses,
-): ProjectView[] {
-  const discovered = discoverClaudeCode(paths)
-  const alive = probe(discovered.flatMap((d) => (d.pid === null ? [] : [d.pid])))
-  const states = reconcileSessions(discovered, {
+): StatusResult {
+  const { sessions, invalid } = discoverClaudeCode(paths)
+  const alive = probe(sessions.flatMap((d) => (d.pid === null ? [] : [d.pid])))
+  const states = reconcileSessions(sessions, {
     alive,
     readLive: (id) => readLiveMarker(paths.helmLive, id),
     transcriptMtimeMs: mtimeMs,
   })
-  return groupIntoProjects(states, {
+  const projects = groupIntoProjects(states, {
     prefs: readPrefs(paths.prefsFile),
     nowMs,
     cwdExists: existsSync,
     isGitRepo: (p) => existsSync(join(p, '.git')),
     home: paths.home,
   })
+  return { projects, invalid }
 }
 
 function mtimeMs(path: string): number | null {
@@ -44,10 +51,10 @@ function mtimeMs(path: string): number | null {
 
 export function runStatus(argv: readonly string[]): number {
   const now = Date.now()
-  const projects = collectStatus(currentPaths(), now)
+  const result = collectStatus(currentPaths(), now)
   const output = argv.includes('--json')
-    ? `${JSON.stringify(projects, null, 2)}\n`
-    : renderTable(projects, { color: useColor(argv), nowMs: now })
+    ? `${JSON.stringify(result, null, 2)}\n`
+    : renderTable(result, { color: useColor(argv), nowMs: now })
   process.stdout.write(output)
   return 0
 }

@@ -17,7 +17,11 @@ const RegistrySchema = z.object({
   procStart: z.string().min(1),
   kind: z.string().default('interactive'),
   name: z.string().default(''),
-  status: z.enum(['busy', 'idle']).nullable().default(null),
+  // Unknown status values must not discard the whole session. `.passthrough()`
+  // above tolerates unknown *fields*; `.catch(null)` here tolerates unknown
+  // *values* of this declared field. Claude Code already ships a third value
+  // ("shell") beyond the two we model, and will add more over time.
+  status: z.enum(['busy', 'idle']).nullable().catch(null),
   updatedAt: z.number().default(0),
 }).passthrough()
 

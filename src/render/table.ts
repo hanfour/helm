@@ -1,3 +1,4 @@
+import type { StatusResult } from '../cli/status.ts'
 import type { ProjectView } from '../projects/group.ts'
 import type { SessionState } from '../types.ts'
 import { dim, glyph, relativeTime, statusOf, type StatusKey } from './glyphs.ts'
@@ -21,12 +22,24 @@ const LABEL: Record<StatusKey, string> = {
   crashed: '已中斷',
 }
 
-export function renderTable(projects: readonly ProjectView[], opts: RenderOptions): string {
+export function renderTable(result: StatusResult, opts: RenderOptions): string {
+  const { projects, invalid } = result
+  const warning = renderInvalidWarning(invalid, opts)
   if (projects.length === 0) {
-    return '沒有找到符合條件的專案。\n（近 14 天內有活動、且是 git repo 的專案才會列出）\n'
+    return `沒有找到符合條件的專案。\n（近 14 天內有活動、且是 git repo 的專案才會列出）\n${warning}`
   }
   const body = projects.map((p) => renderProject(p, opts)).join('\n\n')
-  return `${body}\n${renderSummary(projects)}\n`
+  return `${body}\n${renderSummary(projects)}\n${warning}`
+}
+
+/**
+ * Silent data loss is the worst failure mode for a board whose whole promise
+ * is "nothing gets forgotten". If a registry file could not be parsed, the
+ * user must be told a session is missing rather than shown a short list.
+ */
+function renderInvalidWarning(invalid: number, opts: RenderOptions): string {
+  if (invalid === 0) return ''
+  return dim(`\n⚠ 有 ${invalid} 個 session 記錄無法解析，未列於上方。執行 helm doctor 查看原因。\n`, opts.color)
 }
 
 function renderProject(p: ProjectView, opts: RenderOptions): string {

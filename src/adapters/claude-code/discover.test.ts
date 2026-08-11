@@ -36,23 +36,24 @@ const BASE = {
 test('探索出註冊表中的 session 並帶上 adapterId', () => {
   const home = scaffold([BASE])
   const found = discoverClaudeCode(resolvePaths({ home }))
-  assert.equal(found.length, 1)
-  assert.equal(found[0]?.adapterId, 'claude-code')
-  assert.equal(found[0]?.sessionId, 'sess-a')
-  assert.equal(found[0]?.nativeStatus, 'busy')
+  assert.equal(found.sessions.length, 1)
+  assert.equal(found.sessions[0]?.adapterId, 'claude-code')
+  assert.equal(found.sessions[0]?.sessionId, 'sess-a')
+  assert.equal(found.sessions[0]?.nativeStatus, 'busy')
+  assert.equal(found.invalid, 0)
 })
 
 test('找得到對應的 transcript 路徑', () => {
   const slug = '-Users-testuser-proj'
   const home = scaffold([BASE], [`${slug}/sess-a.jsonl`])
   const found = discoverClaudeCode(resolvePaths({ home }))
-  assert.ok(found[0]?.transcriptPath?.endsWith(`${slug}/sess-a.jsonl`))
+  assert.ok(found.sessions[0]?.transcriptPath?.endsWith(`${slug}/sess-a.jsonl`))
 })
 
 test('沒有對應 transcript 時 transcriptPath 為 null', () => {
   const home = scaffold([BASE])
   const found = discoverClaudeCode(resolvePaths({ home }))
-  assert.equal(found[0]?.transcriptPath, null)
+  assert.equal(found.sessions[0]?.transcriptPath, null)
 })
 
 test('探索結果依 updatedAt 由新到舊排序', () => {
@@ -61,7 +62,7 @@ test('探索結果依 updatedAt 由新到舊排序', () => {
     { ...BASE, pid: 2, sessionId: 'new', updatedAt: 9000 },
   ])
   const found = discoverClaudeCode(resolvePaths({ home }))
-  assert.deepEqual(found.map((f) => f.sessionId), ['new', 'old'])
+  assert.deepEqual(found.sessions.map((f) => f.sessionId), ['new', 'old'])
 })
 
 test('探索不修改傳入的 paths 物件', () => {
@@ -70,4 +71,12 @@ test('探索不修改傳入的 paths 物件', () => {
   const snapshot = { ...paths }
   discoverClaudeCode(paths)
   assert.deepEqual(paths, snapshot)
+})
+
+test('discoverClaudeCode 回傳 invalid 計數而不是丟棄它', () => {
+  const home = scaffold([BASE])
+  writeFileSync(join(home, '.claude', 'sessions', 'broken.json'), '{壞掉')
+  const result = discoverClaudeCode(resolvePaths({ home }))
+  assert.equal(result.sessions.length, 1)
+  assert.equal(result.invalid, 1)
 })

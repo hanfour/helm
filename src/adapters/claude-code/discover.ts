@@ -6,6 +6,12 @@ import { readRegistry } from './registry.ts'
 
 export const ADAPTER_ID = 'claude-code'
 
+export interface DiscoverResult {
+  sessions: DiscoveredSession[]
+  /** Registry files that existed but could not be parsed. Surfaced to the user. */
+  invalid: number
+}
+
 /**
  * Fast path only: reads the registry directory and locates each session's
  * transcript by path existence. Must never read a transcript's contents and
@@ -17,10 +23,10 @@ export const ADAPTER_ID = 'claude-code'
  * makes that single call and passes it down. Probing here as well would
  * spawn `ps` twice per poll for no gain.
  */
-export function discoverClaudeCode(paths: HelmPaths): DiscoveredSession[] {
-  const { entries } = readRegistry(paths.claudeSessions)
+export function discoverClaudeCode(paths: HelmPaths): DiscoverResult {
+  const { entries, invalid } = readRegistry(paths.claudeSessions)
 
-  return entries
+  const sessions = entries
     .map((e): DiscoveredSession => ({
       adapterId: ADAPTER_ID,
       sessionId: e.sessionId,
@@ -35,6 +41,8 @@ export function discoverClaudeCode(paths: HelmPaths): DiscoveredSession[] {
       transcriptPath: findTranscript(paths.claudeProjects, e.cwd, e.sessionId),
     }))
     .toSorted((a, b) => b.updatedAt - a.updatedAt)
+
+  return { sessions, invalid }
 }
 
 /** Claude Code slugifies the cwd by replacing every non-alphanumeric run with `-`. */
