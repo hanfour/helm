@@ -2,6 +2,7 @@
 import { runBrief } from './brief.ts'
 import { runDoctor } from './doctor.ts'
 import { runInstall, runUninstall } from './install.ts'
+import { runPrefs } from './prefs.ts'
 import { runOpen } from './open.ts'
 import { runSessions } from './sessions.ts'
 import { runStatus } from './status.ts'
@@ -17,6 +18,8 @@ const USAGE = `helm — 本機 agent CLI 艦隊看板
                     [--refresh]       開終端機接續，並把簡報寫成檔案讓它讀
   helm install                        安裝 hook 與選單列 plugin（會先備份設定）
   helm uninstall                      完全移除，還原設定
+  helm pin|unpin <專案>               釘選／取消釘選（釘選的專案不受 14 天窗口約束）
+  helm hide|show <專案>               隱藏／取消隱藏
   helm doctor                         檢查 hook、快取與資料來源是否正常
   helm help                           顯示本說明
 
@@ -40,6 +43,11 @@ async function main(argv: readonly string[]): Promise<number> {
       return runUninstall(rest)
     case 'doctor':
       return runDoctor(rest)
+    case 'pin':
+    case 'unpin':
+    case 'hide':
+    case 'show':
+      return runPrefs(command, rest)
     case 'open':
       return runOpen(rest)
     case 'help':
