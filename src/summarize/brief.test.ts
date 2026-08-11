@@ -40,6 +40,19 @@ test('完全不是 JSON 時回傳 null', () => {
   assert.equal(parseBriefJson('抱歉我無法完成這個請求'), null)
 })
 
+test('模型自我修正時取最後一個能 parse 的 fenced block，而非被丟棄的草稿', () => {
+  const draft = JSON.stringify({
+    goal: '錯誤的草稿目標', done: [], currentStep: '', nextStep: '',
+    blockers: [], files: [], prs: [],
+  })
+  const raw = [
+    '```json', draft, '```',
+    '不對，重新來一次，正確答案是：',
+    '```json', VALID, '```',
+  ].join('\n')
+  assert.equal(parseBriefJson(raw)?.goal, '修好登入流程')
+})
+
 test('generateBrief 把 prompt 交給 runner 並解析結果', async () => {
   let seen = ''
   const b = await generateBrief(INPUT, async (p) => { seen = p; return VALID })

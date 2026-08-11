@@ -41,12 +41,36 @@ export function parseBriefJson(raw: string): Brief | null {
   }
 }
 
+/**
+ * Take the LAST parseable candidate, not the first. Models self-correct:
+ * they emit a draft block, say "actually, let me redo that", then emit the
+ * real answer. Matching the first fenced block returns the discarded draft —
+ * which parses cleanly and yields a complete-looking brief built from
+ * abandoned content, with no error and no signal to the user.
+ */
 function extractJsonObject(raw: string): string | null {
-  const fenced = raw.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/)
-  if (fenced?.[1] !== undefined) return fenced[1]
+  const fenced = [...raw.matchAll(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/g)]
+    .map((m) => m[1])
+    .filter((c): c is string => c !== undefined)
+  const lastValid = fenced.findLast(isParseableObject)
+  if (lastValid !== undefined) return lastValid
+
+  // Unfenced fallback. JSON.parse rejects trailing content, so prose-with-braces
+  // and two-bare-objects both fail closed here rather than yielding garbage.
   const first = raw.indexOf('{')
   const last = raw.lastIndexOf('}')
   return first !== -1 && last > first ? raw.slice(first, last + 1) : null
+}
+
+function isParseableObject(candidate: string): boolean {
+  try {
+    const v: unknown = JSON.parse(candidate)
+    return typeof v === 'object' && v !== null && !Array.isArray(v)
+  } catch {
+    // Not a finding — this is the predicate whose whole job is to answer
+    // "does this parse", so a throw here is a legitimate `false`.
+    return false
+  }
 }
 
 export async function generateBrief(
