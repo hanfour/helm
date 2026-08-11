@@ -3781,7 +3781,9 @@ export async function runBrief(
   }
 
   const paths = currentPaths()
-  const session = resolveSession(collectStatus(paths, Date.now()), idPrefix)
+  // Task 11 changed collectStatus to return StatusResult; take .projects.
+  const { projects } = collectStatus(paths, Date.now())
+  const session = resolveSession(projects, idPrefix)
   if (session === null) {
     process.stderr.write(`找不到符合 "${idPrefix}" 的 session。先跑 helm status 看看有哪些。\n`)
     return 1
