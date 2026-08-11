@@ -16,7 +16,11 @@
 - **檔案大小**：單檔 200–400 行為常態，800 行為硬上限。超過就拆。
 - **函式大小**：< 50 行。巢狀深度 ≤ 4 層。
 - **測試覆蓋率**：80% 起跳。每個 task 都以 TDD 進行 —— 先寫失敗的測試。
-- **錯誤處理**：不可靜默吞錯。所有外部輸入（檔案內容、`ps` 輸出、子行程結果）必須經 zod 驗證，失敗要有明確訊息。
+- **邊界驗證**：所有外部輸入（檔案內容、`ps` 輸出、子行程結果）必須經 zod 驗證後才進入系統。
+- **錯誤處理 —— 降級 ≠ 吞錯**。這兩者的差別是本專案的核心設計，reviewer 請依此判斷：
+  - **允許且必要的降級**：規格 §12 表列的情況 —— 讀取外部檔案失敗、解析失敗、`gh`/`git`/`claude` 子行程失敗。這些一律回傳空值或 null 讓上層決定，**因為看板故障絕不能讓使用者正在跑的開發卡住**。每個這類 `catch` 都必須帶一行註解說明為何此處降級是對的。
+  - **禁止的吞錯**：把可修復的程式錯誤、型別違規、程式邏輯錯誤靜默丟掉；或降級後對使用者謊稱成功。
+  - **降級必須可見**：使用者看得到的降級（簡報產生失敗、`gh` 不可用）要在輸出中明講，不得靜靜顯示空白。
 - **不硬編路徑**：所有基準目錄（`~/.claude`、`~/.helm`）由參數傳入，預設值集中在 `src/paths.ts`。這是所有測試能用 fixture 目錄的前提。
 - **Node 版本下限**：24.0.0（`--experimental-strip-types` 需求）。
 - **Commit 格式**：`<type>: <description>`，type 為 feat / fix / refactor / docs / test / chore。不加 Co-Authored-By（使用者全域關閉 attribution）。
@@ -1416,13 +1420,21 @@ test('hidden 優先於 pinned', () => {
 
 for (const p of ['/private/tmp/x', '/var/folders/fs/abc/T/y', '/Users/testuser/Downloads/z']) {
   test(`排除路徑前綴：${p}`, () => {
-    assert.equal(shouldInclude({ ...base, path: p }), false)
+    assert.equal(shouldInclude({ ...base, path: p, home: '/Users/testuser' }), false)
   })
 }
 
 test('排除前綴以路徑邊界比對，不誤傷同名開頭的目錄', () => {
   // /Users/testuser/Downloads 要排除，但 /Users/testuser/Downloads-archive 不該被排除
-  assert.equal(shouldInclude({ ...base, path: '/Users/testuser/Downloads-archive/p' }), true)
+  assert.equal(
+    shouldInclude({ ...base, path: '/Users/testuser/Downloads-archive/p', home: '/Users/testuser' }),
+    true,
+  )
+})
+
+test('沒有傳 home 時，home 相對的排除規則不生效（但絕對路徑規則仍生效）', () => {
+  assert.equal(shouldInclude({ ...base, path: '/Users/testuser/Downloads/z' }), true)
+  assert.equal(shouldInclude({ ...base, path: '/private/tmp/x' }), false)
 })
 ```
 
@@ -1490,27 +1502,7 @@ function isExcludedPath(path: string, home: string | undefined): boolean {
 - [ ] **Step 4: 執行測試確認通過**
 
 Run: `node --test src/projects/include.test.ts`
-Expected: FAIL —— 三個「排除路徑前綴」測試會失敗，因為測試沒有傳 `home`，`Downloads` 規則無從解析。
-
-這是刻意的：修正**測試**，讓那三個案例傳入 `home: '/Users/testuser'`。修改後三個案例改為：
-
-```ts
-for (const p of ['/private/tmp/x', '/var/folders/fs/abc/T/y', '/Users/testuser/Downloads/z']) {
-  test(`排除路徑前綴：${p}`, () => {
-    assert.equal(shouldInclude({ ...base, path: p, home: '/Users/testuser' }), false)
-  })
-}
-
-test('排除前綴以路徑邊界比對，不誤傷同名開頭的目錄', () => {
-  assert.equal(
-    shouldInclude({ ...base, path: '/Users/testuser/Downloads-archive/p', home: '/Users/testuser' }),
-    true,
-  )
-})
-```
-
-重新執行 `node --test src/projects/include.test.ts`
-Expected: PASS，13 個測試全過
+Expected: PASS，14 個測試全過
 
 - [ ] **Step 5: 寫 prefs 的失敗測試**
 
