@@ -47,12 +47,29 @@ test('排除 tool_result 內容，不當成使用者說的話', () => {
   assert.deepEqual(readTranscriptDigest(f).prompts, [])
 })
 
-test('排除系統注入的內容（task-notification 等尖括號開頭）', () => {
+test('排除 isMeta 標記的注入內容 —— 即使它不以尖括號開頭', () => {
+  // 實測：圖片 caption 與 skill 重載訊息都不以 < 開頭，只靠前綴會漏 35%
+  const f = jsonl([
+    { ...userText('[Image: original 1080x2400, displayed at 900x2000.]', '2026-08-11T01:00:00.000Z'), isMeta: true },
+    { ...userText('(Re-invocation of /superpowers:brainstorming)', '2026-08-11T01:30:00.000Z'), isMeta: true },
+    userText('實機測試', '2026-08-11T02:00:00.000Z'),
+  ])
+  assert.deepEqual(readTranscriptDigest(f).prompts, ['實機測試'])
+})
+
+test('尖括號規則作為補強，涵蓋沒有 isMeta 標記的舊格式', () => {
   const f = jsonl([
     userText('<task-notification><task-id>abc</task-id></task-notification>', '2026-08-11T01:00:00.000Z'),
     userText('真的使用者訊息', '2026-08-11T02:00:00.000Z'),
   ])
   assert.deepEqual(readTranscriptDigest(f).prompts, ['真的使用者訊息'])
+})
+
+test('isMeta 為 false 的內容照常保留', () => {
+  const f = jsonl([
+    { ...userText('這是我打的字', '2026-08-11T01:00:00.000Z'), isMeta: false },
+  ])
+  assert.deepEqual(readTranscriptDigest(f).prompts, ['這是我打的字'])
 })
 
 test('只保留最後 N 則 prompt', () => {

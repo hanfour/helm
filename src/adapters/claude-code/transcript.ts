@@ -1,4 +1,37 @@
 import { readFileSync } from 'node:fs'
+import { z } from 'zod'
+
+/**
+ * Transcript records are external input and go through zod like every other
+ * boundary in this project. The schemas are deliberately loose — `.passthrough()`
+ * and defaults everywhere — because Claude Code adds record types and fields
+ * between versions, and a stricter schema would silently drop history.
+ */
+const TextBlock = z.object({ type: z.literal('text'), text: z.string() })
+
+const ToolUseBlock = z.object({
+  type: z.literal('tool_use'),
+  name: z.string().default(''),
+  input: z.record(z.string(), z.unknown()).default({}),
+})
+
+/** Anything else (tool_result, image, …) is kept but carries no meaning here. */
+const OtherBlock = z.object({ type: z.string() }).passthrough()
+
+const ContentBlock = z.union([TextBlock, ToolUseBlock, OtherBlock])
+
+const RecordSchema = z.object({
+  type: z.string().default(''),
+  timestamp: z.string().optional(),
+  gitBranch: z.string().optional(),
+  /** Claude Code marks synthesized user content with this. See isHumanRecord. */
+  isMeta: z.boolean().optional(),
+  message: z.object({
+    content: z.union([z.string(), z.array(ContentBlock)]).optional(),
+  }).passthrough().optional(),
+}).passthrough()
+
+type TranscriptRecord = z.infer<typeof RecordSchema>
 
 export interface ToolCall {
   ts: number
@@ -64,93 +97,98 @@ export function readTranscriptDigest(
   }
 }
 
-function safeParse(line: string): Record<string, unknown> | null {
+function safeParse(line: string): TranscriptRecord | null {
   try {
-    const v: unknown = JSON.parse(line)
-    return typeof v === 'object' && v !== null ? (v as Record<string, unknown>) : null
+    const parsed = RecordSchema.safeParse(JSON.parse(line))
+    return parsed.success ? parsed.data : null
   } catch {
-    // Malformed line; skip it and continue parsing the rest of the transcript.
+    // Degrade, don't throw: one truncated or corrupt line must not cost the
+    // user the rest of their history. A partially-written last line is normal
+    // for a transcript belonging to a session that is still running.
     return null
   }
 }
 
-function absorb(a: TranscriptDigest, rec: Record<string, unknown>): TranscriptDigest {
-  const ts = parseTs(rec['timestamp'])
+function absorb(a: TranscriptDigest, rec: TranscriptRecord): TranscriptDigest {
+  const ts = parseTs(rec.timestamp)
   const withMeta: TranscriptDigest = {
     ...a,
     lastTs: ts ?? a.lastTs,
-    gitBranch: typeof rec['gitBranch'] === 'string' ? rec['gitBranch'] : a.gitBranch,
+    gitBranch: rec.gitBranch ?? a.gitBranch,
   }
-  if (rec['type'] === 'user') return absorbUser(withMeta, rec)
-  if (rec['type'] === 'assistant') return absorbAssistant(withMeta, rec, ts ?? 0)
+  if (rec.type === 'user') return absorbUser(withMeta, rec)
+  if (rec.type === 'assistant') return absorbAssistant(withMeta, rec, ts ?? 0)
   return withMeta
 }
 
-function absorbUser(a: TranscriptDigest, rec: Record<string, unknown>): TranscriptDigest {
-  const texts = userTexts(rec).filter(isHumanPrompt)
+function absorbUser(a: TranscriptDigest, rec: TranscriptRecord): TranscriptDigest {
+  if (!isHumanRecord(rec)) return a
+  const texts = userTexts(rec).filter(isHumanText)
   return texts.length === 0 ? a : { ...a, prompts: [...a.prompts, ...texts] }
 }
 
 function absorbAssistant(
   a: TranscriptDigest,
-  rec: Record<string, unknown>,
+  rec: TranscriptRecord,
   ts: number,
 ): TranscriptDigest {
   return blocks(rec).reduce((acc, b) => {
-    if (b['type'] !== 'tool_use') return acc
-    const name = typeof b['name'] === 'string' ? b['name'] : ''
-    const input = (b['input'] ?? {}) as Record<string, unknown>
-    const file = typeof input['file_path'] === 'string' ? input['file_path'] : null
+    if (b.type !== 'tool_use') return acc
+    const file = typeof b.input['file_path'] === 'string' ? b.input['file_path'] : null
     return {
       ...acc,
       touchedFiles:
-        FILE_TOOLS.has(name) && file !== null && !acc.touchedFiles.includes(file)
+        FILE_TOOLS.has(b.name) && file !== null && !acc.touchedFiles.includes(file)
           ? [...acc.touchedFiles, file]
           : acc.touchedFiles,
-      recentTools: [...acc.recentTools, { ts, name, summary: summarize(name, input) }],
+      recentTools: [...acc.recentTools, { ts, name: b.name, summary: summarize(b) }],
     }
   }, a)
 }
 
-function blocks(rec: Record<string, unknown>): Record<string, unknown>[] {
-  const msg = rec['message']
-  if (typeof msg !== 'object' || msg === null) return []
-  const content = (msg as Record<string, unknown>)['content']
-  return Array.isArray(content) ? (content as Record<string, unknown>[]) : []
+type ToolUse = z.infer<typeof ToolUseBlock>
+
+function blocks(rec: TranscriptRecord): ToolUse[] {
+  const content = rec.message?.content
+  if (!Array.isArray(content)) return []
+  return content.filter((b): b is ToolUse => b.type === 'tool_use')
 }
 
-function userTexts(rec: Record<string, unknown>): string[] {
-  const msg = rec['message']
-  if (typeof msg !== 'object' || msg === null) return []
-  const content = (msg as Record<string, unknown>)['content']
+function userTexts(rec: TranscriptRecord): string[] {
+  const content = rec.message?.content
   if (typeof content === 'string') return [content]
   if (!Array.isArray(content)) return []
-  return content.flatMap((b: unknown) => {
-    if (typeof b !== 'object' || b === null) return []
-    const block = b as Record<string, unknown>
-    return block['type'] === 'text' && typeof block['text'] === 'string'
-      ? [block['text']]
-      : []
-  })
+  return content.flatMap((b) => (b.type === 'text' ? [(b as { text: string }).text] : []))
 }
 
 /**
- * The transcript mixes real user typing with injected system content
- * (task notifications, reminders). Anything opening with a tag is not
- * something the user said.
+ * Claude Code sets `isMeta` on user records it synthesized itself — pasted
+ * image captions, skill re-invocation notices, and similar. Measured on a real
+ * transcript: all 80 isMeta records were synthetic and all 37 non-isMeta plain
+ * texts were genuine typing, with zero misclassifications either way. This is
+ * the reliable signal; the tag-prefix rule below is only a fallback.
  */
-function isHumanPrompt(text: string): boolean {
+function isHumanRecord(rec: TranscriptRecord): boolean {
+  return rec.isMeta !== true
+}
+
+/**
+ * Fallback for records that carry no `isMeta` marker (older transcript
+ * formats). Catches tag-wrapped injections like <task-notification>, but
+ * NOT caption-style ones — that is why isHumanRecord exists.
+ */
+function isHumanText(text: string): boolean {
   const t = text.trim()
   return t !== '' && !t.startsWith('<')
 }
 
-function summarize(name: string, input: Record<string, unknown>): string {
+function summarize(b: ToolUse): string {
   const raw =
-    name === 'Bash' && typeof input['command'] === 'string'
-      ? input['command']
-      : typeof input['file_path'] === 'string'
-        ? input['file_path']
-        : JSON.stringify(input)
+    b.name === 'Bash' && typeof b.input['command'] === 'string'
+      ? b.input['command']
+      : typeof b.input['file_path'] === 'string'
+        ? b.input['file_path']
+        : JSON.stringify(b.input)
   return raw.slice(0, MAX_SUMMARY)
 }
 
