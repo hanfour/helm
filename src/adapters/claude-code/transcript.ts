@@ -148,17 +148,31 @@ function absorbAssistant(
 
 type ToolUse = z.infer<typeof ToolUseBlock>
 
+/**
+ * Re-parse each element with the specific block schema rather than testing
+ * `b.type` and casting. A block like `{type:'tool_use', input:'string'}` fails
+ * ToolUseBlock, falls through the union to OtherBlock's passthrough, and still
+ * reads as `type === 'tool_use'` — so a type predicate would pass a malformed
+ * block downstream, causing crashes when accessing `.input['file_path']`.
+ * safeParse is the only check that actually holds at runtime.
+ */
 function blocks(rec: TranscriptRecord): ToolUse[] {
   const content = rec.message?.content
   if (!Array.isArray(content)) return []
-  return content.filter((b): b is ToolUse => b.type === 'tool_use')
+  return content.flatMap((b) => {
+    const parsed = ToolUseBlock.safeParse(b)
+    return parsed.success ? [parsed.data] : []
+  })
 }
 
 function userTexts(rec: TranscriptRecord): string[] {
   const content = rec.message?.content
   if (typeof content === 'string') return [content]
   if (!Array.isArray(content)) return []
-  return content.flatMap((b) => (b.type === 'text' ? [(b as { text: string }).text] : []))
+  return content.flatMap((b) => {
+    const parsed = TextBlock.safeParse(b)
+    return parsed.success ? [parsed.data.text] : []
+  })
 }
 
 /**

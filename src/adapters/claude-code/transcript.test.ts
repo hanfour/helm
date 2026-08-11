@@ -136,6 +136,44 @@ test('檔案不存在時回傳空 digest 而不拋錯', () => {
   })
 })
 
+test('Regression: malformed text block（缺 text 欄位或型別錯誤）不拋錯', () => {
+  // 回歸測試：zod passthrough 允許 {type:'text'} 或 {type:'text', text:123}
+  // 通過，但舊的 cast 會讓 isHumanText 收到 undefined 並拋 TypeError。
+  const f = jsonl([
+    {
+      type: 'user', timestamp: '2026-08-11T01:00:00.000Z',
+      message: { content: [
+        { type: 'text' }, // 缺 text
+        { type: 'text', text: 123 }, // 型別錯誤
+        { type: 'text', text: '真的訊息' }, // 正常
+      ] },
+    },
+  ])
+  const d = readTranscriptDigest(f)
+  assert.deepEqual(d.prompts, ['真的訊息'])
+})
+
+test('Regression: malformed tool_use block（input 不是 object）不拋錯', () => {
+  // 回歸測試：{type:'tool_use', input:'not-an-object'} 落到 OtherBlock
+  // 舊的 filter((b): b is ToolUse => b.type === 'tool_use') 型別述詞無 runtime 檢查
+  // 所以會把錯誤的 block 當作 ToolUse，導致 input 是字串、然後取 input['file_path']
+  // 時得到 undefined。新版本用 safeParse 會正確跳過它。
+  const f = jsonl([
+    {
+      type: 'assistant', timestamp: '2026-08-11T01:00:00.000Z',
+      message: { content: [
+        { type: 'tool_use', name: 'Bash', input: { command: 'ls' } }, // 正常
+        { type: 'tool_use', name: 'Edit', input: 'not-an-object' }, // 型別錯誤
+        { type: 'tool_use', name: 'Read', input: { file_path: '/p/x.ts' } }, // 正常
+      ] },
+    },
+  ])
+  const d = readTranscriptDigest(f)
+  assert.equal(d.recentTools.length, 2) // 只有兩個正常的
+  assert.equal(d.recentTools[0]?.name, 'Bash')
+  assert.equal(d.recentTools[1]?.name, 'Read')
+})
+
 test('DEFAULT_LIMITS 對應規格 §8 的 20 / 50 / 3', () => {
   assert.deepEqual(DEFAULT_LIMITS, { prompts: 20, files: 50, tools: 3 })
 })
