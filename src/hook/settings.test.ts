@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { addHelmHook, hasHelmHook, removeHelmHook } from './settings.ts'
 import { HOOK_MARKER } from './snippet.ts'
 
-const CMD = `sh -c ': ${HOOK_MARKER}; true'`
+const CMD = `exec node --no-warnings '/repo/src/hook/record.mjs' '/h/live' '/h/e.log' # ${HOOK_MARKER}`
 
 /** The shape the user's file actually has today: no hooks key at all. */
 const REAL = {
@@ -97,4 +97,41 @@ test('removeHelmHook 不修改輸入', () => {
   const snapshot = structuredClone(input)
   removeHelmHook(input)
   assert.deepEqual(input, snapshot)
+})
+
+test('hook 以 async 安裝 —— 它只負責記錄，永遠不該擋住工具呼叫', () => {
+  const entry = ((addHelmHook(REAL, CMD)['hooks'] as {
+    PreToolUse: { hooks: { async?: boolean }[] }[]
+  }).PreToolUse[0]?.hooks[0])
+  assert.equal(entry?.async, true)
+})
+
+test('只提到 marker 字串的第三方 hook 不會被誤刪', () => {
+  // 一個「檢查 helm 是否已安裝」的稽核腳本是很自然的東西。用整組 JSON 做
+  // 子字串比對會把它連同整組靜默刪掉，而且 uninstall 不備份，無法回復。
+  const foreign = {
+    hooks: {
+      PreToolUse: [{
+        matcher: 'Bash',
+        hooks: [{ type: 'command', command: `grep -q ${HOOK_MARKER} ~/.claude/settings.json` }],
+      }],
+    },
+  }
+  assert.equal(hasHelmHook(foreign), false)
+  const installed = addHelmHook(foreign, CMD)
+  assert.equal((installed['hooks'] as { PreToolUse: unknown[] }).PreToolUse.length, 2)
+  assert.deepEqual(removeHelmHook(installed), foreign)
+})
+
+test('形狀像但不是 helm 寫的（沒有 marker）也不會被刪', () => {
+  const foreign = {
+    hooks: {
+      PreToolUse: [{
+        matcher: '*',
+        hooks: [{ type: 'command', command: 'exec node --no-warnings /somewhere/else.mjs' }],
+      }],
+    },
+  }
+  assert.equal(hasHelmHook(foreign), false)
+  assert.deepEqual(removeHelmHook(foreign), foreign)
 })

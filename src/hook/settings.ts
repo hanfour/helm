@@ -7,6 +7,9 @@ const HookGroup = z.object({
   hooks: z.array(HookEntry).default([]),
 }).passthrough()
 
+/** Exactly what `buildHookCommand` emits, so nothing else can be mistaken for it. */
+const COMMAND_PREFIX = 'exec node --no-warnings '
+
 /**
  * Only the `hooks` key is described. Everything else in the user's
  * settings.json is carried through untouched and unvalidated — helm has no
@@ -43,7 +46,15 @@ export function addHelmHook(settings: unknown, command: string): Settings {
         // Filtering first makes a repeat install an update rather than a
         // duplicate — the command string changes whenever the repo moves.
         ...existing.filter((g) => !isHelmGroup(g)),
-        { matcher: '*', hooks: [{ type: 'command', command }], description: DESCRIPTION },
+        {
+          matcher: '*',
+          // Async because this hook only ever records — it never inspects or
+          // vetoes the tool call. Claude Code runs async hooks in the
+          // background where they cannot block tool execution, which is what
+          // keeps the recorder's ~190 ms spawn off the user's critical path.
+          hooks: [{ type: 'command', command, async: true }],
+          description: DESCRIPTION,
+        },
       ],
     },
   }
@@ -77,9 +88,23 @@ export function hasHelmHook(settings: unknown): boolean {
   return Array.isArray(pre) && pre.some(isHelmGroup)
 }
 
-/** Matches on the embedded marker, not on paths — the repo may have moved. */
+/**
+ * Identified by shape, not by a substring of the whole group. Matching on
+ * "this JSON mentions HELM_LIVE_MARKER anywhere" would silently delete a
+ * third-party hook that merely asks whether helm is installed — a very
+ * reasonable thing for an audit script to do, and unrecoverable once
+ * uninstall has run.
+ *
+ * The marker is still required, so a group helm did not write is never
+ * touched even if it happens to share the shape.
+ */
 function isHelmGroup(group: unknown): boolean {
-  return JSON.stringify(group ?? null).includes(HOOK_MARKER)
+  if (!isRecord(group) || group['matcher'] !== '*') return false
+  const hooks = group['hooks']
+  if (!Array.isArray(hooks) || hooks.length !== 1) return false
+  const entry = hooks[0]
+  if (!isRecord(entry) || typeof entry['command'] !== 'string') return false
+  return entry['command'].startsWith(COMMAND_PREFIX) && entry['command'].includes(HOOK_MARKER)
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {

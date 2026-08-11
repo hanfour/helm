@@ -5,7 +5,7 @@ import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readLiveMarker } from './live.ts'
-import { HOOK_SCRIPT } from '../hook/snippet.ts'
+import { buildHookCommand } from '../hook/snippet.ts'
 
 function liveDir(files: Record<string, string>): string {
   const dir = mkdtempSync(join(tmpdir(), 'helm-live-'))
@@ -67,11 +67,10 @@ test('hook 實際寫出的內容能被 readLiveMarker 直接吃下', () => {
   // 只有它守著。兩邊分開改的時候，只有它會出聲。
   const dir = mkdtempSync(join(tmpdir(), 'helm-live-'))
   const id = 'aaaa1111-0000-1111-2222-333344445555'
-  execFileSync('sh', ['-c', HOOK_SCRIPT], {
+  execFileSync('sh', ['-c', buildHookCommand(dir, join(dir, 'errors.log'))], {
     input: JSON.stringify({
       session_id: id, tool_name: 'Bash', tool_input: { command: 'npm test' },
     }),
-    env: { ...process.env, HELM_LIVE: dir },
     stdio: ['pipe', 'ignore', 'ignore'],
   })
   const marker = readLiveMarker(dir, id)
