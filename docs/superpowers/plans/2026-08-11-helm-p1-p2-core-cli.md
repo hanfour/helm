@@ -4196,10 +4196,19 @@ shell    interactive  /Users/you/project-alpha     ← 完全不出現在 helm s
 idle     interactive  /Users/you/Projects/project-bravo
 idle     interactive  /Users/you/acme/report-tool
 busy     interactive  /Users/you/acme/example-service
-...
 ```
 
 `status: "shell"` 是 Claude Code 的第三種原生狀態值。Task 2 的 schema 寫 `z.enum(['busy','idle'])`，遇到它整個 `safeParse` 失敗，該 session 被計入 `invalid` 並丟棄。
+
+**十分鐘後的複查讓這個缺陷升級，而不是降級**：同一個 session 的 status 變回 `idle`，於是它又正常出現了。
+
+```
+idle     interactive  /Users/you/project-alpha     ← 又回來了
+```
+
+也就是說 `shell` 是**暫態值** —— Claude Code 只在該 session 正在執行 shell 指令的那段時間設定它。這代表缺陷是**間歇性**的：使用者在某個 session 跑指令的當下去看看板，那個專案就從清單上消失；等他想重現時又好了。這是最難被相信、也最難被回報的一種 bug。
+
+**因此本 task 的驗證不得依賴真實資料當下剛好處於 `shell` 狀態** —— 那是碰運氣。改用 fixture 與人造檔案來證明修正有效。
 
 **兩個獨立的問題，都要修**：
 
@@ -4269,19 +4278,34 @@ Expected: 兩個新測試 FAIL，`entries.length` 為 0、`invalid` 為 1 ——
 Run: `node --test src/adapters/claude-code/registry.test.ts`
 Expected: PASS，9 個測試全過（原 7 + 新 2）
 
-- [ ] **Step 5: 對真實資料驗證那個消失的 session 回來了**
+- [ ] **Step 5: 用真實資料的副本驗證，不碰使用者的目錄**
 
-Run:
+`shell` 是暫態值，不能等它出現。把真實註冊表複製一份到暫存目錄，改一筆的 status 成 `shell`，對副本驗證：
+
 ```bash
+TMP=$(mktemp -d)
+cp ~/.claude/sessions/*.json "$TMP/" 2>/dev/null
+FIRST=$(ls "$TMP"/*.json | head -1)
+python3 -c "
+import json,sys
+p='$FIRST'
+d=json.load(open(p))
+d['status']='shell'
+json.dump(d, open(p,'w'))
+print('已把', d['cwd'], '改成 status=shell')
+"
 node --input-type=module -e "
 import { readRegistry } from './src/adapters/claude-code/registry.ts'
-import { resolvePaths } from './src/paths.ts'
-const r = readRegistry(resolvePaths().claudeSessions)
+const r = readRegistry('$TMP')
 console.log('有效:', r.entries.length, '無效:', r.invalid)
 for (const e of r.entries) console.log(' ', String(e.status), e.cwd)
 "
+rm -rf "$TMP"
 ```
-Expected: 有效數比修正前多一筆，無效為 0，且清單中出現 `null /Users/you/project-alpha`。
+
+Expected: 有效數等於檔案總數、無效為 0，且被改動的那一筆以 `null` 出現在清單中而不是消失。**修正前跑同一段會看到有效數少一、無效為 1** —— 值得先跑一次記下來當對照。
+
+絕對不要修改 `~/.claude/sessions/` 底下的真實檔案。
 
 - [ ] **Step 6: 寫 invalid 計數貫穿到輸出的失敗測試**
 
@@ -4403,16 +4427,20 @@ Expected: 型別檢查無誤、全部測試通過、覆蓋率維持 80% 以上�
 - [ ] **Step 10: 對真實資料驗收**
 
 Run: `node src/cli/main.ts status --no-color`
-Expected: `project-alpha` 出現在清單中（狀態顯示為等輸入，因為 `shell` 已降級為 null），專案數比修正前多一個，且沒有警告行（invalid 為 0）。
+Expected: 正常列出全部專案，末尾**沒有**警告行（因為此刻 invalid 為 0）。
 
-Run:
+再用一個假的 home 驗證警告確實會出現。**不要碰 `~/.claude/sessions/`** —— 那是使用者真實的 Claude Code 目錄，往裡面寫測試檔會干擾他正在跑的工作：
+
 ```bash
-cp ~/.claude/sessions/$(ls ~/.claude/sessions | head -1) /tmp/helm-backup.json
-echo '{壞掉' > ~/.claude/sessions/zzz-helm-test.json
-node src/cli/main.ts status --no-color | tail -3
-rm ~/.claude/sessions/zzz-helm-test.json
+FAKE=$(mktemp -d)
+mkdir -p "$FAKE/.claude/sessions"
+cp ~/.claude/sessions/*.json "$FAKE/.claude/sessions/" 2>/dev/null
+echo '{壞掉' > "$FAKE/.claude/sessions/zzz-broken.json"
+HELM_FAKE_HOME="$FAKE" node src/cli/main.ts status --no-color | tail -4
+rm -rf "$FAKE"
 ```
-Expected: 輸出末尾出現「有 1 個 session 記錄無法解析」的警告。**測試後務必刪除那個假檔** —— 它在使用者真實的 Claude Code 目錄裡。
+
+Expected: 輸出末尾出現「有 1 個 session 記錄無法解析」的警告。（`HELM_FAKE_HOME` 是 Task 6 的 `currentPaths` 已經支援的環境變數，正是為這種驗證而設。）
 
 - [ ] **Step 11: Commit**
 
