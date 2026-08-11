@@ -42,15 +42,15 @@ export function readRegistry(sessionsDir: string): RegistryReadResult {
     return { entries: [], invalid: 0 }
   }
 
-  return names.reduce<RegistryReadResult>(
-    (acc, name) => {
-      const parsed = parseOne(join(sessionsDir, name))
-      return parsed === null
-        ? { ...acc, invalid: acc.invalid + 1 }
-        : { ...acc, entries: [...acc.entries, parsed] }
-    },
-    { entries: [], invalid: 0 },
-  )
+  // Local accumulator, never escapes before it is returned.
+  const entries: RegistryEntry[] = []
+  let invalid = 0
+  for (const name of names) {
+    const parsed = parseOne(join(sessionsDir, name))
+    if (parsed === null) invalid += 1
+    else entries.push(parsed)
+  }
+  return { entries, invalid }
 }
 
 function parseOne(file: string): RegistryEntry | null {

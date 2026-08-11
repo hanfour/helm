@@ -1,5 +1,6 @@
 import type { Board } from '../board.ts'
 import type { ProjectView } from '../projects/group.ts'
+import { ACTIVITY_WINDOW_DAYS } from '../projects/include.ts'
 import { statusOf, type StatusKey } from '../session-status.ts'
 import type { Confidence } from '../types.ts'
 import { dim, markOf, paint, relativeTime } from './glyphs.ts'
@@ -45,9 +46,9 @@ const GAP = '  '
  */
 export function renderTable(board: Board, opts: RenderOptions): string {
   const { projects, invalid } = board
-  const warning = renderInvalidWarning(invalid, opts)
+  const warning = renderInvalidWarning(invalid, opts) + renderPrefsWarning(board, opts)
   if (projects.length === 0) {
-    return `沒有找到符合條件的專案。\n（近 14 天內有活動、且是 git repo 的專案才會列出）\n${warning}`
+    return `沒有找到符合條件的專案。\n（近 ${ACTIVITY_WINDOW_DAYS} 天內有活動、且是 git repo 的專案才會列出）\n${warning}`
   }
   const rows = projects.map((p) => cellsOf(p, opts))
   const widths = columnWidths(rows)
@@ -135,6 +136,20 @@ function noteOf(p: ProjectView): string {
 function renderInvalidWarning(invalid: number, opts: RenderOptions): string {
   if (invalid === 0) return ''
   return dim(`\n⚠ 有 ${invalid} 個 session 記錄無法解析，未列於上方。執行 helm doctor 查看原因。\n`, opts.color)
+}
+
+/**
+ * Pins and hidden flags are user intent and cannot be rebuilt from anything.
+ * Resetting them without a word would leave the user believing they had never
+ * set them — so say it, and say where the original went.
+ */
+function renderPrefsWarning(board: Board, opts: RenderOptions): string {
+  if (!board.prefsCorrupt) return ''
+  return dim(
+    '\n⚠ 偏好檔無法解析，這次的釘選與隱藏設定沒有生效。\n' +
+    '  原檔已保留為 ~/.helm/projects.corrupt.json，修好後改回檔名即可。\n',
+    opts.color,
+  )
 }
 
 function renderSummary(projects: readonly ProjectView[]): string {

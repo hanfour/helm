@@ -17,7 +17,7 @@ export function collectStatus(
   nowMs: number,
   probe: ProcessProbe = queryProcesses,
 ): Board {
-  const prefs = readPrefs(paths.prefsFile)
+  const { prefs, corrupt: prefsCorrupt } = readPrefs(paths.prefsFile)
   const { sessions, invalid } = discoverClaudeCode(paths, {
     windowDays: ACTIVITY_WINDOW_DAYS,
     nowMs,
@@ -28,9 +28,9 @@ export function collectStatus(
       .filter(([, p]) => p.pinned)
       .map(([path]) => path),
   })
-  const alive = probe(sessions.flatMap((d) => (d.pid === null ? [] : [d.pid])))
+  const probed = probe(sessions.flatMap((d) => (d.pid === null ? [] : [d.pid])))
   const states = reconcileSessions(sessions, {
-    alive,
+    probe: probed,
     readLive: (id) => readLiveMarker(paths.helmLive, id),
     transcriptMtimeMs: mtimeMs,
   })
@@ -41,7 +41,7 @@ export function collectStatus(
     isGitRepo: (p) => existsSync(join(p, '.git')),
     home: paths.home,
   })
-  return { projects, invalid }
+  return { projects, invalid, prefsCorrupt }
 }
 
 function mtimeMs(path: string): number | null {

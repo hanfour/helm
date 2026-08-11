@@ -51,7 +51,7 @@ function scaffold(): { home: string; cwd: string } {
 
 test('collectStatus 串起探索、判定與分組', () => {
   const { home } = scaffold()
-  const out = collectStatus(resolvePaths({ home }), NOW, () => new Map())
+  const out = collectStatus(resolvePaths({ home }), NOW, () => ({ alive: new Map(), unreachable: new Set<number>() }))
   assert.equal(out.projects.length, 1)
   assert.equal(out.projects[0]?.name, 'proj')
   assert.equal(out.projects[0]?.sessions.length, 1)
@@ -60,14 +60,14 @@ test('collectStatus 串起探索、判定與分組', () => {
 
 test('PID 已死時判定為 crashed', () => {
   const { home } = scaffold()
-  const out = collectStatus(resolvePaths({ home }), NOW, () => new Map())
+  const out = collectStatus(resolvePaths({ home }), NOW, () => ({ alive: new Map(), unreachable: new Set<number>() }))
   assert.equal(out.projects[0]?.sessions[0]?.lifecycle, 'crashed')
 })
 
 test('PID 存活且 procStart 相符時判定為 running', () => {
   const { home } = scaffold()
   const alive = new Map([[4242, fmtLocal(new Date(PROC_START_INSTANT))]])
-  const out = collectStatus(resolvePaths({ home }), NOW, () => alive)
+  const out = collectStatus(resolvePaths({ home }), NOW, () => ({ alive, unreachable: new Set<number>() }))
   assert.equal(out.projects[0]?.sessions[0]?.lifecycle, 'running')
 })
 
@@ -83,7 +83,10 @@ test('沒有 .git 的目錄不會出現', () => {
       status: 'idle', updatedAt: NOW,
     }),
   )
-  assert.deepEqual(collectStatus(resolvePaths({ home }), NOW, () => new Map()), { projects: [], invalid: 0 })
+  assert.deepEqual(
+    collectStatus(resolvePaths({ home }), NOW, () => ({ alive: new Map(), unreachable: new Set<number>() })),
+    { projects: [], invalid: 0, prefsCorrupt: false },
+  )
 })
 
 /** Render a Date the way `LC_ALL=C ps -o lstart=` would, in local time. */
@@ -117,7 +120,7 @@ test('釘選的專案即使超過 14 天沒有活動仍列得出來', () => {
     JSON.stringify({ version: 1, projects: { [cwd]: { pinned: true, hidden: false } } }),
   )
 
-  const out = collectStatus(resolvePaths({ home }), NOW, () => new Map())
+  const out = collectStatus(resolvePaths({ home }), NOW, () => ({ alive: new Map(), unreachable: new Set<number>() }))
   assert.deepEqual(out.projects.map((p) => p.name), ['side-project'])
 })
 
@@ -133,5 +136,5 @@ test('沒有釘選的專案超過 14 天沒活動就不列出 —— 窗口本�
   const longAgo = (NOW - 20 * 86_400_000) / 1000
   utimesSync(transcript, longAgo, longAgo)
 
-  assert.deepEqual(collectStatus(resolvePaths({ home }), NOW, () => new Map()).projects, [])
+  assert.deepEqual(collectStatus(resolvePaths({ home }), NOW, () => ({ alive: new Map(), unreachable: new Set<number>() })).projects, [])
 })

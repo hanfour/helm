@@ -1,10 +1,12 @@
 import type { Confidence, DiscoveredSession, Lifecycle, LiveMarker, SessionState } from '../types.ts'
-import { parseLstart, procStartMatches } from '../adapters/claude-code/processes.ts'
+import { parseLstart, procStartMatches, type ProbeResult } from '../adapters/claude-code/processes.ts'
 
 export interface LifecycleInput {
   /** Whether ~/.claude/sessions/<pid>.json still exists. */
   registryFileExists: boolean
   pidAlive: boolean
+  /** True when no answer about this PID could be obtained at all. */
+  pidUnknown: boolean
   /** Raw `LC_ALL=C ps -o lstart=` output for the PID, if alive. */
   psLstart: string | null
   /** Raw procStart from the registry file. */
@@ -36,6 +38,10 @@ export function decideLifecycle(input: LifecycleInput): LifecycleVerdict {
 }
 
 function fromRegistry(input: LifecycleInput): LifecycleVerdict {
+  // No answer is not the same as a negative answer. Reporting it as a
+  // high-confidence crash would turn one failed `ps` call into a board full of
+  // red dots; the `?` suffix exists precisely for what we cannot verify.
+  if (input.pidUnknown) return { lifecycle: 'crashed', confidence: 'low' }
   if (!input.pidAlive) return { lifecycle: 'crashed', confidence: 'high' }
   if (input.procStart === null || input.psLstart === null) {
     return { lifecycle: 'crashed', confidence: 'low' }
@@ -63,8 +69,8 @@ function fromAbsence(input: LifecycleInput): LifecycleVerdict {
 }
 
 export interface ReconcileDeps {
-  /** pid → raw `ps` lstart string. Absent key means the PID is dead. */
-  alive: Map<number, string>
+  /** What the OS said about each PID, including the ones it could not answer. */
+  probe: ProbeResult
   readLive: (sessionId: string) => LiveMarker | null
   /** Only consulted when the session did not already carry an mtime. */
   transcriptMtimeMs: (path: string) => number | null
@@ -81,12 +87,13 @@ export function reconcileSessions(
 ): SessionState[] {
   return sessions.map((s) => {
     const live = deps.readLive(s.sessionId)
-    const psLstart = s.pid === null ? null : (deps.alive.get(s.pid) ?? null)
+    const psLstart = s.pid === null ? null : (deps.probe.alive.get(s.pid) ?? null)
     const verdict = decideLifecycle({
       // A session discovered from the registry always has a PID; anything
       // without one was found some other way, so treat the registry as absent.
       registryFileExists: s.pid !== null,
       pidAlive: psLstart !== null,
+      pidUnknown: s.pid !== null && deps.probe.unreachable.has(s.pid),
       psLstart,
       procStart: s.procStart,
       live,

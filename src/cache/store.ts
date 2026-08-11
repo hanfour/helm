@@ -44,16 +44,22 @@ const BriefSchema = z.object({
   prs: z.array(z.string()).default([]),
 })
 
+const BriefEntrySchema = z.object({
+  digest: z.string().min(1),
+  generatedAt: z.number(),
+  // Defaulted rather than required: caches written before this field existed
+  // are still perfectly good briefs and must not be thrown away.
+  gitBranch: z.string().nullable().default(null),
+  body: BriefSchema,
+})
+
 const CacheSchema = z.object({
   version: z.literal(1),
-  briefs: z.record(z.string(), z.object({
-    digest: z.string().min(1),
-    generatedAt: z.number(),
-    // Defaulted rather than required: caches written before this field existed
-    // are still perfectly good briefs and must not be thrown away.
-    gitBranch: z.string().nullable().default(null),
-    body: BriefSchema,
-  })).default({}),
+  // Each entry is validated separately below. A record-wide schema would fail
+  // the whole file over one bad value, and every value here cost 57-86 s of
+  // LLM time — this is the most expensive data helm holds and it had the most
+  // brittle parse.
+  briefs: z.record(z.string(), z.unknown()).default({}),
   prs: z.record(z.string(), z.unknown()).default({}),
   projects: z.record(z.string(), z.object({
     name: z.string().default(''),
@@ -75,9 +81,24 @@ export function readCache(cacheFile: string): CacheShape {
     return EMPTY_CACHE
   }
   const parsed = CacheSchema.safeParse(safeJson(raw))
-  if (parsed.success) return parsed.data
-  quarantine(cacheFile)
-  return EMPTY_CACHE
+  if (!parsed.success) {
+    // The file as a whole is unusable — truncated, wrong version, not an
+    // object. Nothing here can be salvaged per entry, so preserve it for
+    // inspection and start over.
+    quarantine(cacheFile)
+    return EMPTY_CACHE
+  }
+  return { ...parsed.data, briefs: parseBriefs(parsed.data.briefs) }
+}
+
+/** Drops only the entries that fail; a bad neighbour costs nothing. */
+function parseBriefs(raw: Record<string, unknown>): Record<string, BriefEntry> {
+  return Object.fromEntries(
+    Object.entries(raw).flatMap(([id, value]) => {
+      const entry = BriefEntrySchema.safeParse(value)
+      return entry.success ? [[id, entry.data] as const] : []
+    }),
+  )
 }
 
 function safeJson(raw: string): unknown {
@@ -99,9 +120,17 @@ function quarantine(cacheFile: string): void {
   }
 }
 
+/**
+ * Write to a sibling then rename. `writeFileSync` truncates in place, so a
+ * crash mid-write leaves a half-written file — which the reader would then
+ * quarantine, taking every cached brief with it. Rename is atomic within a
+ * filesystem, so a reader sees either the old file or the new one.
+ */
 export function writeCache(cacheFile: string, cache: CacheShape): void {
   mkdirSync(dirname(cacheFile), { recursive: true })
-  writeFileSync(cacheFile, `${JSON.stringify(cache, null, 2)}\n`, 'utf8')
+  const temp = `${cacheFile}.${process.pid}.tmp`
+  writeFileSync(temp, `${JSON.stringify(cache, null, 2)}\n`, 'utf8')
+  renameSync(temp, cacheFile)
 }
 
 export function setBrief(cache: CacheShape, sessionId: string, entry: BriefEntry): CacheShape {

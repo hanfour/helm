@@ -33,7 +33,7 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
  * real live process is read back and re-rendered the way the registry writes it.
  */
 function registryProcStart(pid: number): string {
-  const ms = parseLstart(queryProcesses([pid]).get(pid) ?? '')
+  const ms = parseLstart(queryProcesses([pid]).alive.get(pid) ?? '')
   assert.notEqual(ms, null, `無法取得 PID ${pid} 的啟動時間`)
   const d = new Date(ms as number)
   const p = (n: number) => String(n).padStart(2, '0')

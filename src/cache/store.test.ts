@@ -1,8 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, existsSync, readFileSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import {
   readCache, writeCache, setBrief, getFreshBriefEntry, digestOf, EMPTY_CACHE,
 } from './store.ts'
@@ -81,4 +81,36 @@ test('digestOf 在檔案變動後產生不同值', async () => {
 test('digestOf 對 null 或不存在的路徑回傳 null', () => {
   assert.equal(digestOf(null), null)
   assert.equal(digestOf('/nonexistent/x'), null)
+})
+
+test('單一筆壞掉的 brief 只丟那一筆，其餘照常保留', () => {
+  // 每一筆簡報都是 57-86 秒的 LLM 花費。全有全無的解析讓一筆手改壞的、
+  // 或一次寫到一半的紀錄，賠掉其他二十筆。
+  const f = tmpFile(JSON.stringify({
+    version: 1,
+    briefs: {
+      good: { digest: 'd1', generatedAt: 1, gitBranch: null, body: BRIEF },
+      bad: { digest: '', generatedAt: 'not a number' },
+    },
+    prs: {}, projects: {},
+  }))
+  const c = readCache(f)
+  assert.deepEqual(c.briefs['good']?.body, BRIEF)
+  assert.equal(c.briefs['bad'], undefined)
+  assert.equal(existsSync(f.replace(/\.json$/, '.corrupt.json')), false, '不該整份隔離')
+})
+
+test('整份 JSON 壞掉時仍然隔離整份 —— 那時沒有東西救得回來', () => {
+  const f = tmpFile('{壞掉')
+  assert.deepEqual(readCache(f), EMPTY_CACHE)
+  assert.equal(existsSync(f.replace(/\.json$/, '.corrupt.json')), true)
+})
+
+test('寫入是原子的 —— 中途失敗不會留下半份檔案', () => {
+  // 直接觀察：寫完之後目錄裡不該留有暫存檔。
+  const f = tmpFile()
+  writeCache(f, setBrief(EMPTY_CACHE, 's1', { digest: 'd1', generatedAt: 1, gitBranch: null, body: BRIEF }))
+  const leftovers = readdirSync(dirname(f)).filter((n: string) => n.includes('.tmp'))
+  assert.deepEqual(leftovers, [])
+  assert.deepEqual(readCache(f).briefs['s1']?.body, BRIEF)
 })

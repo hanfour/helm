@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { z } from 'zod'
 import type { ProjectPrefs } from './include.ts'
@@ -18,17 +18,41 @@ export interface PrefsFile {
 
 const EMPTY: PrefsFile = { version: 1, projects: {} }
 
+export interface PrefsRead {
+  prefs: PrefsFile
+  /** True when a file existed but could not be used; it has been set aside. */
+  corrupt: boolean
+}
+
 /**
  * ~/.helm/projects.json is the single source of truth for user intent
- * (spec §4.4). Unlike cache.json it is never auto-deleted, and a corrupt
- * file must not prevent the CLI from running.
+ * (spec §4.4) and, unlike cache.json, it cannot be rebuilt from anything.
+ *
+ * That is why an unreadable file is set aside rather than treated as absent:
+ * returning empty prefs is invisible, and the very next `writePrefs` would
+ * overwrite the original — turning one truncated write into the permanent loss
+ * of every pin and hidden flag the user ever set. A future `version: 2` file
+ * takes the same path for the same reason.
  */
-export function readPrefs(prefsFile: string): PrefsFile {
+export function readPrefs(prefsFile: string): PrefsRead {
+  if (!existsSync(prefsFile)) return { prefs: EMPTY, corrupt: false }
   try {
     const parsed = PrefsSchema.safeParse(JSON.parse(readFileSync(prefsFile, 'utf8')))
-    return parsed.success ? { version: 1, projects: parsed.data.projects } : EMPTY
+    if (parsed.success) return { prefs: { version: 1, projects: parsed.data.projects }, corrupt: false }
   } catch {
-    return EMPTY
+    // Falls through to quarantine — an unparseable file and a schema mismatch
+    // both mean "we must not write over this".
+  }
+  quarantine(prefsFile)
+  return { prefs: EMPTY, corrupt: true }
+}
+
+function quarantine(prefsFile: string): void {
+  try {
+    renameSync(prefsFile, prefsFile.replace(/\.json$/, '.corrupt.json'))
+  } catch {
+    // Nothing more we can do; the caller still gets usable empty prefs, and
+    // `corrupt: true` means the user is told rather than silently reset.
   }
 }
 

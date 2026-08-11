@@ -82,19 +82,40 @@ export function readTranscriptDigest(
     return EMPTY
   }
 
-  const acc = text.split('\n').reduce<TranscriptDigest>((a, line) => {
-    if (line.trim() === '') return a
+  // Local accumulator, never escapes this function. The previous version
+  // rebuilt the whole digest per tool_use block and ran `summarize` — a
+  // JSON.stringify over the tool's entire input — on every one of them, only
+  // to keep the last three. A ring bounded by the limit keeps the discarded
+  // payloads out of both the copies and the stringifier.
+  const acc: Accumulator = {
+    prompts: [], files: new Set(), tools: [], lastTs: null, gitBranch: null,
+  }
+  for (const line of text.split('\n')) {
+    if (line.trim() === '') continue
     const rec = safeParse(line)
-    return rec === null ? a : absorb(a, rec)
-  }, EMPTY)
+    if (rec !== null) absorb(acc, rec, limits)
+  }
 
   return {
     prompts: acc.prompts.slice(-limits.prompts),
-    touchedFiles: acc.touchedFiles.slice(-limits.files),
-    recentTools: acc.recentTools.slice(-limits.tools),
+    touchedFiles: [...acc.files].slice(-limits.files),
+    recentTools: acc.tools.map((t) => ({ ts: t.ts, name: t.block.name, summary: summarize(t.block) })),
     lastTs: acc.lastTs,
     gitBranch: acc.gitBranch,
   }
+}
+
+interface PendingTool {
+  ts: number
+  block: ToolUse
+}
+
+interface Accumulator {
+  prompts: string[]
+  files: Set<string>
+  tools: PendingTool[]
+  lastTs: number | null
+  gitBranch: string | null
 }
 
 function safeParse(line: string): TranscriptRecord | null {
@@ -109,41 +130,32 @@ function safeParse(line: string): TranscriptRecord | null {
   }
 }
 
-function absorb(a: TranscriptDigest, rec: TranscriptRecord): TranscriptDigest {
+function absorb(a: Accumulator, rec: TranscriptRecord, limits: DigestLimits): void {
   const ts = parseTs(rec.timestamp)
-  const withMeta: TranscriptDigest = {
-    ...a,
-    lastTs: ts ?? a.lastTs,
-    gitBranch: rec.gitBranch ?? a.gitBranch,
-  }
-  if (rec.type === 'user') return absorbUser(withMeta, rec)
-  if (rec.type === 'assistant') return absorbAssistant(withMeta, rec, ts ?? 0)
-  return withMeta
+  if (ts !== null) a.lastTs = ts
+  if (rec.gitBranch !== undefined) a.gitBranch = rec.gitBranch
+  if (rec.type === 'user') absorbUser(a, rec)
+  else if (rec.type === 'assistant') absorbAssistant(a, rec, ts ?? 0, limits)
 }
 
-function absorbUser(a: TranscriptDigest, rec: TranscriptRecord): TranscriptDigest {
-  if (!isHumanRecord(rec)) return a
-  const texts = userTexts(rec).filter(isHumanText)
-  return texts.length === 0 ? a : { ...a, prompts: [...a.prompts, ...texts] }
+function absorbUser(a: Accumulator, rec: TranscriptRecord): void {
+  if (!isHumanRecord(rec)) return
+  a.prompts.push(...userTexts(rec).filter(isHumanText))
 }
 
 function absorbAssistant(
-  a: TranscriptDigest,
+  a: Accumulator,
   rec: TranscriptRecord,
   ts: number,
-): TranscriptDigest {
-  return blocks(rec).reduce((acc, b) => {
-    if (b.type !== 'tool_use') return acc
-    const file = typeof b.input['file_path'] === 'string' ? b.input['file_path'] : null
-    return {
-      ...acc,
-      touchedFiles:
-        FILE_TOOLS.has(b.name) && file !== null && !acc.touchedFiles.includes(file)
-          ? [...acc.touchedFiles, file]
-          : acc.touchedFiles,
-      recentTools: [...acc.recentTools, { ts, name: b.name, summary: summarize(b) }],
-    }
-  }, a)
+  limits: DigestLimits,
+): void {
+  for (const b of blocks(rec)) {
+    if (b.type !== 'tool_use') continue
+    const file = b.input['file_path']
+    if (FILE_TOOLS.has(b.name) && typeof file === 'string') a.files.add(file)
+    a.tools.push({ ts, block: b })
+    if (a.tools.length > limits.tools) a.tools.shift()
+  }
 }
 
 type ToolUse = z.infer<typeof ToolUseBlock>

@@ -49,54 +49,74 @@ test('無法解析的輸入回傳 null 並使比對為 false', () => {
 
 test('查得到自己的 PID 並帶回 lstart', () => {
   const got = queryProcesses([process.pid])
-  assert.equal(got.has(process.pid), true)
-  assert.notEqual(parseLstart(got.get(process.pid) ?? ''), null)
+  assert.equal(got.alive.has(process.pid), true)
+  assert.notEqual(parseLstart(got.alive.get(process.pid) ?? ''), null)
+})
+
+test('ps 整個掛掉時回報「不知道」，不是「都死了」', () => {
+  // 這是 Task 12 修正的漏網之魚：退回逐一查詢仍然全部失敗時，舊實作回傳
+  // 空 Map，而空 Map 與「這些 PID 都不存在」無法區分 —— 於是整面看板又
+  // 全部變紅，而且是高信心的紅。
+  const probe = createProbe(() => null)
+  const got = probe([100, 200])
+  assert.equal(got.alive.size, 0)
+  assert.deepEqual([...got.unreachable].toSorted(), [100, 200])
+})
+
+test('超出範圍的 PID 算「不知道」，不算死亡證據', () => {
+  // 我們根本沒問過它。沒問過不等於它死了。
+  const got = queryProcesses([process.pid, 999999])
+  assert.equal(got.alive.has(process.pid), true)
+  assert.equal(got.unreachable.has(999999), true)
+})
+
+test('正常查得到答案時 unreachable 是空的', () => {
+  assert.equal(queryProcesses([process.pid]).unreachable.size, 0)
 })
 
 test('一個超出範圍的 PID 不影響同批其他 PID 的查詢結果', () => {
-  // 這正是缺陷本身：ps 因為一個壞參數整批失敗，舊實作把它讀成「全部都死了」，
-  // 於是看板把每個 session 都標成當機 —— 誤報比漏報更糟，使用者會去 resume
-  // 一個其實正在跑的 session。
   const got = queryProcesses([process.pid, 999999])
-  assert.equal(got.has(process.pid), true, '活著的 PID 必須仍被回報為存活')
-  assert.equal(got.has(999999), false)
+  assert.equal(got.alive.has(process.pid), true, '活著的 PID 必須仍被回報為存活')
+  assert.equal(got.alive.has(999999), false)
 })
 
-test('全部都是無效 PID 時回傳空 Map 而不拋錯', () => {
-  assert.equal(queryProcesses([999998, 999999]).size, 0)
+test('全部都是無效 PID 時不拋錯，且一律歸為不知道', () => {
+  const got = queryProcesses([999998, 999999])
+  assert.equal(got.alive.size, 0)
+  assert.equal(got.unreachable.size, 2)
 })
 
-test('超出範圍或不合理的 PID 在送給 ps 之前就被濾掉', () => {
-  assert.equal(queryProcesses([0, -1, 999999, 1.5]).size, 0)
+test('不合理的 PID 不會送給 ps，但也不當成死亡證據', () => {
+  const got = queryProcesses([0, -1, 999999, 1.5])
+  assert.equal(got.alive.size, 0)
+  assert.equal(got.unreachable.size, 4)
 })
 
 test('範圍內但已死的 PID 只影響它自己', () => {
-  // 3999 在 ps 接受的範圍內，所以走的是正常路徑而非退回逐一查詢。
   const got = queryProcesses([process.pid, 3999])
-  assert.equal(got.has(process.pid), true)
+  assert.equal(got.alive.has(process.pid), true)
 })
 
 test('空清單不 spawn 任何行程', () => {
-  assert.equal(queryProcesses([]).size, 0)
+  assert.equal(queryProcesses([]).alive.size, 0)
 })
 
-test('剛結束的行程被真的 ps 判定為已死，且不拋錯', () => {
-  // 用一個確定已經結束、PID 又確定在合法範圍內的行程，才測得到 ps 真正
-  // 「跑成功但都不存在」那條路 —— 它是非零結束但 stderr 為空。
+test('剛結束的行程被真的 ps 判定為已死 —— 那是明確的答案，不是不知道', () => {
   const dead = spawnSync('/usr/bin/true').pid
   assert.equal(typeof dead, 'number')
   const got = queryProcesses([dead as number])
-  assert.equal(got.has(dead as number), false)
+  assert.equal(got.alive.has(dead as number), false)
+  assert.equal(got.unreachable.has(dead as number), false, 'ps 有回答，只是說它不在')
 })
 
 test('剛結束的行程不會拖累同批仍活著的 PID', () => {
   const dead = spawnSync('/usr/bin/true').pid
   const got = queryProcesses([process.pid, dead as number])
-  assert.equal(got.has(process.pid), true)
-  assert.equal(got.has(dead as number), false)
+  assert.equal(got.alive.has(process.pid), true)
+  assert.equal(got.alive.has(dead as number), false)
 })
 
-test('全部都是合法但已死的 PID 時回傳空 Map，不觸發逐一重查', () => {
+test('全部都是合法但已死的 PID 時不觸發逐一重查', () => {
   // 99998/99999 在 ps 接受的範圍內但幾乎不可能存在，走的是「跑成功、都不存在」
   // 那條路 —— stderr 是空的，所以直接回空 Map。
   let calls = 0
@@ -105,7 +125,7 @@ test('全部都是合法但已死的 PID 時回傳空 Map，不觸發逐一重�
     assert.deepEqual([...pids], [99998, 99999])
     return new Map()
   })
-  assert.equal(probe([99998, 99999]).size, 0)
+  assert.equal(probe([99998, 99999]).alive.size, 0)
   assert.equal(calls, 1, '批次成功時不該再逐一查一次')
 })
 
@@ -113,7 +133,7 @@ test('批次失敗時退回逐一查詢，活著的 PID 仍被回報', () => {
   const probe = createProbe((pids) =>
     pids.length > 1 ? null : new Map([[pids[0] as number, 'Mon Aug 10 00:00:00 2026']]))
   const got = probe([100, 200, 300])
-  assert.deepEqual([...got.keys()], [100, 200, 300])
+  assert.deepEqual([...got.alive.keys()], [100, 200, 300])
 })
 
 test('逐一查詢時，個別失敗的 PID 只影響它自己', () => {
@@ -122,12 +142,11 @@ test('逐一查詢時，個別失敗的 PID 只影響它自己', () => {
     return pids[0] === 200 ? null : new Map([[pids[0] as number, 'Mon Aug 10 00:00:00 2026']])
   })
   const got = probe([100, 200, 300])
-  assert.deepEqual([...got.keys()], [100, 300])
+  assert.deepEqual([...got.alive.keys()], [100, 300])
+  assert.deepEqual([...got.unreachable], [200], '單獨失敗的那個是「不知道」')
 })
 
-test('批次失敗且逐一查詢也全失敗時回傳空 Map 而不拋錯', () => {
-  assert.equal(createProbe(() => null)([100, 200]).size, 0)
-})
+
 
 test('createProbe 也會先濾掉不合理的 PID，不讓它們進到 runner', () => {
   const seen: number[] = []

@@ -11,9 +11,19 @@ const PS_OTHER = fmtLocal(new Date(Date.UTC(2026, 7, 6, 9, 30, 0)))
 const marker = (ts: number): LiveMarker =>
   ({ sessionId: 's', ts, toolName: 'Bash', summary: 'git status' })
 
+test('註冊表在、但根本問不到 PID 的狀態 → 低信心，不當成死亡證據', () => {
+  // ps 整個掛掉時，每一個 session 都會走到這裡。若判成高信心 crashed，
+  // 一次失敗的系統呼叫就會讓整面看板變紅，而使用者會去 resume 還活著的 session。
+  const r = decideLifecycle({
+    registryFileExists: true, pidAlive: false, pidUnknown: true, psLstart: null,
+    procStart: PROC_START, live: null, transcriptMtimeMs: null,
+  })
+  assert.deepEqual(r, { lifecycle: 'crashed', confidence: 'low' })
+})
+
 test('註冊表在、PID 活著、procStart 相符 → running', () => {
   const r = decideLifecycle({
-    registryFileExists: true, pidAlive: true, psLstart: PS_MATCHING,
+    registryFileExists: true, pidAlive: true, pidUnknown: false, psLstart: PS_MATCHING,
     procStart: PROC_START, live: null, transcriptMtimeMs: null,
   })
   assert.deepEqual(r, { lifecycle: 'running', confidence: 'high' })
@@ -21,7 +31,7 @@ test('註冊表在、PID 活著、procStart 相符 → running', () => {
 
 test('註冊表在、PID 死了 → crashed（來不及刪檔）', () => {
   const r = decideLifecycle({
-    registryFileExists: true, pidAlive: false, psLstart: null,
+    registryFileExists: true, pidAlive: false, pidUnknown: false, psLstart: null,
     procStart: PROC_START, live: null, transcriptMtimeMs: null,
   })
   assert.deepEqual(r, { lifecycle: 'crashed', confidence: 'high' })
@@ -29,7 +39,7 @@ test('註冊表在、PID 死了 → crashed（來不及刪檔）', () => {
 
 test('註冊表在、PID 活著、但 procStart 不符 → crashed（PID 被重用）', () => {
   const r = decideLifecycle({
-    registryFileExists: true, pidAlive: true, psLstart: PS_OTHER,
+    registryFileExists: true, pidAlive: true, pidUnknown: false, psLstart: PS_OTHER,
     procStart: PROC_START, live: null, transcriptMtimeMs: null,
   })
   assert.deepEqual(r, { lifecycle: 'crashed', confidence: 'high' })
@@ -37,7 +47,7 @@ test('註冊表在、PID 活著、但 procStart 不符 → crashed（PID 被重�
 
 test('註冊表不在、live 檔晚於 transcript 末筆 → crashed（當機於工具執行中）', () => {
   const r = decideLifecycle({
-    registryFileExists: false, pidAlive: false, psLstart: null, procStart: null,
+    registryFileExists: false, pidAlive: false, pidUnknown: false, psLstart: null, procStart: null,
     live: marker(5000), transcriptMtimeMs: 4000,
   })
   assert.deepEqual(r, { lifecycle: 'crashed', confidence: 'high' })
@@ -45,7 +55,7 @@ test('註冊表不在、live 檔晚於 transcript 末筆 → crashed（當機於
 
 test('註冊表不在、live 檔早於 transcript 末筆 → ended_clean', () => {
   const r = decideLifecycle({
-    registryFileExists: false, pidAlive: false, psLstart: null, procStart: null,
+    registryFileExists: false, pidAlive: false, pidUnknown: false, psLstart: null, procStart: null,
     live: marker(3000), transcriptMtimeMs: 4000,
   })
   assert.deepEqual(r, { lifecycle: 'ended_clean', confidence: 'high' })
@@ -53,7 +63,7 @@ test('註冊表不在、live 檔早於 transcript 末筆 → ended_clean', () =>
 
 test('註冊表不在、無 live 檔 → ended_clean', () => {
   const r = decideLifecycle({
-    registryFileExists: false, pidAlive: false, psLstart: null, procStart: null,
+    registryFileExists: false, pidAlive: false, pidUnknown: false, psLstart: null, procStart: null,
     live: null, transcriptMtimeMs: 4000,
   })
   assert.deepEqual(r, { lifecycle: 'ended_clean', confidence: 'high' })
@@ -61,7 +71,7 @@ test('註冊表不在、無 live 檔 → ended_clean', () => {
 
 test('註冊表不在、有 live 檔但沒有 transcript → ended_clean 且信心降為 low', () => {
   const r = decideLifecycle({
-    registryFileExists: false, pidAlive: false, psLstart: null, procStart: null,
+    registryFileExists: false, pidAlive: false, pidUnknown: false, psLstart: null, procStart: null,
     live: marker(5000), transcriptMtimeMs: null,
   })
   assert.deepEqual(r, { lifecycle: 'ended_clean', confidence: 'low' })
@@ -69,7 +79,7 @@ test('註冊表不在、有 live 檔但沒有 transcript → ended_clean 且信�
 
 test('註冊表在、PID 活著、但 procStart 無法解析 → crashed 且信心降為 low', () => {
   const r = decideLifecycle({
-    registryFileExists: true, pidAlive: true, psLstart: '無法解析',
+    registryFileExists: true, pidAlive: true, pidUnknown: false, psLstart: '無法解析',
     procStart: PROC_START, live: null, transcriptMtimeMs: null,
   })
   assert.deepEqual(r, { lifecycle: 'crashed', confidence: 'low' })
@@ -93,7 +103,7 @@ const session = (over: Partial<DiscoveredSession> = {}): DiscoveredSession => ({
 
 test('reconcileSessions 為每個 session 附上 lifecycle 與 live', () => {
   const out = reconcileSessions([session()], {
-    alive: new Map([[111, PS_MATCHING]]),
+    probe: { alive: new Map([[111, PS_MATCHING]]), unreachable: new Set<number>() },
     readLive: () => null,
     transcriptMtimeMs: () => 4000,
   })
@@ -106,14 +116,14 @@ test('reconcileSessions 不修改輸入陣列或其元素', () => {
   const input = [session()]
   const snapshot = structuredClone(input)
   reconcileSessions(input, {
-    alive: new Map(), readLive: () => null, transcriptMtimeMs: () => null,
+    probe: { alive: new Map(), unreachable: new Set<number>() }, readLive: () => null, transcriptMtimeMs: () => null,
   })
   assert.deepEqual(input, snapshot)
 })
 
 test('PID 為 null（例如非 Claude Code adapter）時視為註冊表不存在', () => {
   const out = reconcileSessions([session({ pid: null, procStart: null })], {
-    alive: new Map(), readLive: () => null, transcriptMtimeMs: () => 4000,
+    probe: { alive: new Map(), unreachable: new Set<number>() }, readLive: () => null, transcriptMtimeMs: () => 4000,
   })
   assert.equal(out[0]?.lifecycle, 'ended_clean')
 })
@@ -124,7 +134,7 @@ test('psLstart 格式有效但時刻不同 → crashed/high（真的 PID 重用�
   // Must return high confidence (genuine PID reuse), not low (parse failure).
   const psUnpadded = 'Thu Aug  6  6:16:12 2026' // hour not zero-padded
   const r = decideLifecycle({
-    registryFileExists: true, pidAlive: true, psLstart: psUnpadded,
+    registryFileExists: true, pidAlive: true, pidUnknown: false, psLstart: psUnpadded,
     procStart: PROC_START, live: null, transcriptMtimeMs: null,
   })
   assert.deepEqual(r, { lifecycle: 'crashed', confidence: 'high' })

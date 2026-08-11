@@ -5,6 +5,7 @@ import { displayWidth } from './width.ts'
 import type { Board } from '../board.ts'
 import type { ProjectView } from '../projects/group.ts'
 import type { SessionState } from '../types.ts'
+import { ACTIVITY_WINDOW_DAYS } from '../projects/include.ts'
 
 const ESC = String.fromCharCode(27)
 const NOW = Date.UTC(2026, 7, 11, 12, 0, 0)
@@ -28,7 +29,7 @@ const proj = (over: Partial<ProjectView>): ProjectView => {
 
 const opts = { color: false, nowMs: NOW }
 
-const res = (projects: ProjectView[], invalid = 0): Board => ({ projects, invalid })
+const res = (projects: ProjectView[], invalid = 0): Board => ({ projects, invalid, prefsCorrupt: false })
 
 test('空清單顯示提示而非空字串', () => {
   assert.match(renderTable(res([]), opts), /沒有找到/)
@@ -173,4 +174,20 @@ test('沒有解析失敗時不顯示任何警告', () => {
 test('全部都解析失敗時，空清單訊息也要說明原因', () => {
   const out = renderTable(res([], 3), opts)
   assert.match(out, /3 個/)
+})
+
+test('偏好檔毀損時在輸出中明講，並告知原檔沒有被丟掉', () => {
+  // 釘選與隱藏是使用者意圖，不可重建。靜默歸零會讓他以為自己沒設過。
+  const out = renderTable({ projects: [proj({})], invalid: 0, prefsCorrupt: true }, opts)
+  assert.match(out, /釘選|隱藏|偏好/)
+  assert.match(out, /corrupt/)
+})
+
+test('偏好檔正常時不顯示該警告', () => {
+  assert.ok(!renderTable(res([proj({})]), opts).includes('.corrupt.json'))
+})
+
+test('空清單訊息裡的天數取自常數，不是寫死的 14', () => {
+  // 常數改了而文案沒改，使用者會看到一個不再成立的數字，而且沒有任何測試會紅。
+  assert.match(renderTable(res([]), opts), new RegExp(`近 ${ACTIVITY_WINDOW_DAYS} 天`))
 })

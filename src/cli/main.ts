@@ -42,4 +42,20 @@ async function main(argv: readonly string[]): Promise<number> {
   }
 }
 
-process.exitCode = await main(process.argv.slice(2))
+/**
+ * Every leaf module in helm degrades deliberately, but the writes that must
+ * succeed — the brief file, the cache, the prefs file — can still fail on a
+ * full disk or a read-only home. Without this the user gets a raw
+ * `[UnhandledPromiseRejection] Error: EACCES …` and a stack trace, and the
+ * exit code lands on 1 by accident rather than by decision.
+ */
+process.exitCode = await main(process.argv.slice(2)).catch((err: unknown) => {
+  const msg = err instanceof Error ? err.message : String(err)
+  process.stderr.write(`helm 失敗了：${msg}\n`)
+  if (process.env['HELM_DEBUG'] === '1' && err instanceof Error) {
+    process.stderr.write(`${err.stack ?? ''}\n`)
+  } else {
+    process.stderr.write('（設定 HELM_DEBUG=1 可看到完整的錯誤堆疊）\n')
+  }
+  return 1
+})

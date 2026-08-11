@@ -177,3 +177,41 @@ test('Regression: malformed tool_use block（input 不是 object）不拋錯', (
 test('DEFAULT_LIMITS 對應規格 §8 的 20 / 50 / 3', () => {
   assert.deepEqual(DEFAULT_LIMITS, { prompts: 20, files: 50, tools: 3 })
 })
+
+test('大量工具呼叫時不會二次方成長 —— 只留最後幾筆，也不對丟棄的做摘要', () => {
+  // 3000 次工具呼叫的 session 是真的會出現的。每個 block 都複製整個累加器、
+  // 又對每一個大 payload 做 JSON.stringify，最後卻只留 3 筆。
+  const big = 'x'.repeat(5000)
+  const lines = Array.from({ length: 2000 }, (_, i) => ({
+    type: 'assistant',
+    timestamp: '2026-08-11T00:00:00.000Z',
+    message: {
+      content: [{ type: 'tool_use', name: 'Write', input: { file_path: `/f${i}.ts`, content: big } }],
+    },
+  }))
+  const path = jsonl(lines)
+  const started = performance.now()
+  const digest = readTranscriptDigest(path)
+  const elapsed = performance.now() - started
+  assert.equal(digest.recentTools.length, 3)
+  assert.equal(digest.recentTools[2]?.summary, '/f1999.ts')
+  assert.ok(elapsed < 1000, `解析花了 ${elapsed.toFixed(0)}ms，二次方成長沒修掉`)
+})
+
+test('touchedFiles 去重後仍受上限約束', () => {
+  const lines = Array.from({ length: 300 }, (_, i) => ({
+    type: 'assistant',
+    message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: `/f${i}.ts` } }] },
+  }))
+  const digest = readTranscriptDigest(jsonl(lines))
+  assert.equal(digest.touchedFiles.length, 50)
+})
+
+test('同一個檔案被碰很多次只算一次', () => {
+  const lines = Array.from({ length: 10 }, () => ({
+    type: 'assistant',
+    message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: '/same.ts' } }] },
+  }))
+  const digest = readTranscriptDigest(jsonl(lines))
+  assert.deepEqual(digest.touchedFiles, ['/same.ts'])
+})
