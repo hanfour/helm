@@ -4,6 +4,7 @@ import { resolvePaths } from './paths.ts'
 
 test('resolvePaths 由 home 推導出全部預設路徑', () => {
   const p = resolvePaths({ home: '/tmp/fakehome' })
+  assert.equal(p.home, '/tmp/fakehome')
   assert.equal(p.claudeSessions, '/tmp/fakehome/.claude/sessions')
   assert.equal(p.claudeProjects, '/tmp/fakehome/.claude/projects')
   assert.equal(p.helmLive, '/tmp/fakehome/.helm/live')

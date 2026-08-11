@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 從本機真實 Claude Code 資料建立測試 fixture，並將使用者名稱匿名化。
+# Extract test fixtures from real Claude Code data and anonymize usernames.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 SRC_SESSIONS="$HOME/.claude/sessions"
@@ -9,7 +9,7 @@ REAL_USER="$(basename "$HOME")"
 rm -rf "$ROOT/claude"
 mkdir -p "$ROOT/claude/sessions"
 
-# 1. 註冊表：取最多 3 個，將 home 路徑與使用者名稱換掉
+# 1. Session registry: extract up to 3 files, replace home paths and usernames.
 n=0
 for f in "$SRC_SESSIONS"/*.json; do
   [ -f "$f" ] || continue
@@ -18,9 +18,9 @@ for f in "$SRC_SESSIONS"/*.json; do
   n=$((n+1)); [ $n -ge 3 ] && break
 done
 
-# 2. Transcript：取最大的一份的頭 200 行與尾 200 行，保留結構但縮小體積
+# 2. Transcript: extract largest file's head+tail 200 lines, anonymize paths and usernames.
 big=$(find "$SRC_PROJECTS" -name '*.jsonl' -type f -print0 \
-      | xargs -0 ls -S 2>/dev/null | head -1)
+      | xargs -0 ls -S 2>/dev/null | head -1 || true)
 if [ -n "$big" ]; then
   slug=$(basename "$(dirname "$big")" | sed "s|$REAL_USER|testuser|g")
   mkdir -p "$ROOT/claude/projects/$slug"
