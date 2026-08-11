@@ -19,8 +19,16 @@ for f in "$SRC_SESSIONS"/*.json; do
 done
 
 # 2. Transcript: extract largest file's head+tail 200 lines, anonymize paths and usernames.
-big=$(find "$SRC_PROJECTS" -name '*.jsonl' -type f -print0 \
-      | xargs -0 ls -S 2>/dev/null | head -1 || true)
+#    Validate directory exists first — pipefail is disabled for just this pipeline because
+#    `head -1` closes the read end early, which SIGPIPEs `ls` and would otherwise abort
+#    the script under `set -e`. Not `|| true` — that would also swallow genuine errors.
+if ! find "$SRC_PROJECTS" -type d >/dev/null 2>&1; then
+  echo "Error: cannot access projects directory: $SRC_PROJECTS" >&2
+  exit 1
+fi
+big=$(set +o pipefail
+      find "$SRC_PROJECTS" -name '*.jsonl' -type f -print0 \
+      | xargs -0 ls -S 2>/dev/null | head -1)
 if [ -n "$big" ]; then
   slug=$(basename "$(dirname "$big")" | sed "s|$REAL_USER|testuser|g")
   mkdir -p "$ROOT/claude/projects/$slug"
