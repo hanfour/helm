@@ -3573,12 +3573,36 @@ export function parseBriefJson(raw: string): Brief | null {
   }
 }
 
+/**
+ * Take the LAST parseable candidate, not the first. Models self-correct:
+ * they emit a draft block, say "actually, let me redo that", then emit the
+ * real answer. Matching the first fenced block returns the discarded draft —
+ * which parses cleanly and yields a complete-looking brief built from
+ * abandoned content, with no error and no signal to the user.
+ */
 function extractJsonObject(raw: string): string | null {
-  const fenced = raw.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/)
-  if (fenced?.[1] !== undefined) return fenced[1]
+  const fenced = [...raw.matchAll(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/g)]
+    .map((m) => m[1])
+    .filter((c): c is string => c !== undefined)
+  const lastValid = fenced.findLast(isParseableObject)
+  if (lastValid !== undefined) return lastValid
+
+  // Unfenced fallback. JSON.parse rejects trailing content, so prose-with-braces
+  // and two-bare-objects both fail closed here rather than yielding garbage.
   const first = raw.indexOf('{')
   const last = raw.lastIndexOf('}')
   return first !== -1 && last > first ? raw.slice(first, last + 1) : null
+}
+
+function isParseableObject(candidate: string): boolean {
+  try {
+    const v: unknown = JSON.parse(candidate)
+    return typeof v === 'object' && v !== null && !Array.isArray(v)
+  } catch {
+    // Not a finding — this is the predicate whose whole job is to answer
+    // "does this parse", so a throw here is a legitimate `false`.
+    return false
+  }
 }
 
 export async function generateBrief(
@@ -3796,10 +3820,7 @@ export async function runBrief(
     ? null
     : getFreshBrief(cache, session.sessionId, fingerprint)
 
-  const brief = cached ?? await generateBrief(
-    buildSummaryInput(session, digest, readGitSnapshot(session.cwd)),
-    run,
-  )
+  const brief = cached ?? await generateWithNotice(session, digest, run)
 
   if (brief === null) {
     process.stdout.write(renderFallback(digest.prompts))
@@ -3823,7 +3844,84 @@ export async function runBrief(
   }))
   return 0
 }
+
+/**
+ * Generating costs an LLM call that measured 57-86 seconds against real
+ * sessions. Never spend that silently: a user staring at a frozen terminal
+ * cannot tell "working" from "hung", and has no chance to abort.
+ *
+ * A running session's transcript keeps growing, so its digest never
+ * stabilizes and the cache can never hit — say so, or the user will wonder
+ * why the same command is slow every single time.
+ */
+async function generateWithNotice(
+  session: SessionState,
+  digest: TranscriptDigest,
+  run: ClaudeRunner,
+): Promise<Brief | null> {
+  const stillRunning = session.lifecycle === 'running'
+  process.stderr.write(
+    `正在產生交接簡報，需要 1-2 分鐘…${stillRunning ? '\n（這個 session 還在跑，內容持續變動，所以每次都得重新產生）' : ''}\n`,
+  )
+  return generateBrief(buildSummaryInput(session, digest, readGitSnapshot(session.cwd)), run)
+}
 ```
+
+`cli/brief.ts` 的 import 需要補 `SessionState`（from `../types.ts`）、`TranscriptDigest`（from `../adapters/claude-code/transcript.ts`）與 `Brief`（from `../cache/store.ts`）。
+
+- [ ] **Step 13b: 補 `src/cli/brief.ts` 的測試**
+
+`cli/brief.ts` 承載兩件事：session id 的前綴解析，以及決定要不要花錢的 cache gate 佈線。這兩件都不能只靠人工檢查。建立 `src/cli/brief.test.ts`：
+
+```ts
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { resolveSession } from './brief.ts'
+import type { ProjectView } from '../projects/group.ts'
+import type { SessionState } from '../types.ts'
+
+const sess = (id: string): SessionState => ({
+  adapterId: 'claude-code', sessionId: id, cwd: '/p', pid: 1, procStart: null,
+  startedAt: 0, updatedAt: 0, nativeStatus: null, kind: 'interactive', name: '',
+  transcriptPath: null, lifecycle: 'crashed', lifecycleConfidence: 'high', live: null,
+})
+const proj = (sessions: SessionState[]): ProjectView =>
+  ({ path: '/p', name: 'p', pinned: false, lastActivityMs: 0, sessions })
+
+test('用前 8 碼短 id 找得到 session', () => {
+  const found = resolveSession([proj([sess('abcdef12-3456-7890')])], 'abcdef12')
+  assert.equal(found?.sessionId, 'abcdef12-3456-7890')
+})
+
+test('用完整 id 也找得到', () => {
+  const found = resolveSession([proj([sess('abcdef12-3456-7890')])], 'abcdef12-3456-7890')
+  assert.equal(found?.sessionId, 'abcdef12-3456-7890')
+})
+
+test('跨專案搜尋', () => {
+  const found = resolveSession(
+    [proj([sess('aaa11111')]), proj([sess('bbb22222')])], 'bbb2')
+  assert.equal(found?.sessionId, 'bbb22222')
+})
+
+test('找不到時回傳 null 而不是丟錯', () => {
+  assert.equal(resolveSession([proj([sess('aaa11111')])], 'zzz'), null)
+})
+
+test('空清單回傳 null', () => {
+  assert.equal(resolveSession([], 'abc'), null)
+})
+
+test('前綴同時符合多個時，回傳第一個而非丟錯（行為需明確）', () => {
+  // 記錄現況行為：.find() 取第一個。若日後要改成報錯要求使用者給更長的
+  // 前綴，這個測試會提醒你那是刻意的行為變更。
+  const found = resolveSession([proj([sess('abc11111'), sess('abc22222')])], 'abc')
+  assert.equal(found?.sessionId, 'abc11111')
+})
+```
+
+Run: `node --test src/cli/brief.test.ts`
+Expected: PASS，6 個測試全過
 
 - [ ] **Step 14: 在 main.ts 註冊 brief 子指令**
 
