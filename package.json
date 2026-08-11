@@ -1,0 +1,16 @@
+{
+  "name": "helm",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "bin": { "helm": "./src/cli/main.ts" },
+  "engines": { "node": ">=24.0.0" },
+  "scripts": {
+    "test": "node --test \"src/**/*.test.ts\"",
+    "test:cov": "node --test --experimental-test-coverage \"src/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "check": "bash scripts/check.sh"
+  },
+  "dependencies": { "zod": "^3.23.8" },
+  "devDependencies": { "typescript": "^5.6.0", "@types/node": "^24.0.0" }
+}
