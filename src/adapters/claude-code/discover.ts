@@ -19,6 +19,11 @@ export interface DiscoverResult {
 export interface DiscoverOptions {
   windowDays: number
   nowMs: number
+  /**
+   * Cwds to scan regardless of how old their transcripts are. The adapter is
+   * told *which* paths, never *why* — user preferences stay out of here.
+   */
+  alwaysInclude: readonly string[]
 }
 
 export interface DiscoverDeps {
@@ -51,16 +56,30 @@ export function discoverClaudeCode(
   deps: DiscoverDeps = defaultDeps(),
 ): DiscoverResult {
   const { entries, invalid } = readRegistry(paths.claudeSessions)
+  // The window is a scan bound *and* a display rule, and the two must agree on
+  // the exemptions or the disagreement is invisible: an earlier version bounded
+  // the scan by the window alone, so a pinned project with no recent transcript
+  // was dropped here and `shouldInclude`'s pinned exemption never ran. The
+  // caller therefore has to name the paths that outlive the window.
+  // Dropping the bound entirely also works but costs the 200 ms budget:
+  // measured 78 ms windowed against 230 ms unbounded on 500 transcripts.
   const since = opts.nowMs - opts.windowDays * DAY_MS
-  const transcripts = scanTranscripts(paths.claudeProjects, since)
+  const always = new Set(opts.alwaysInclude.map((p) => slugifyCwd(p).toLowerCase()))
+  const transcripts = scanTranscripts(paths.claudeProjects, since, always)
   const bySessionId = new Map(transcripts.map((t) => [t.sessionId, t]))
+  // Both of these are per-directory answers being asked per-file. Measured on
+  // 500 transcripts across 24 project directories: resolving every slug
+  // separately cost 111 ms against 17 ms for the distinct ones, and realpath
+  // another 20 ms for cwds that are overwhelmingly the same handful of paths.
+  const resolved = memoize((slug: string) => resolveSlug(slug, { subdirs: deps.subdirs }))
+  const canonical = memoize(deps.canonicalPath)
 
   const live = entries.map((e) =>
-    fromRegistry(e, bySessionId.get(e.sessionId), paths.claudeProjects, deps))
+    fromRegistry(e, bySessionId.get(e.sessionId), paths.claudeProjects, canonical))
   const known = new Set(entries.map((e) => e.sessionId))
   const historical = transcripts
     .filter((t) => !known.has(t.sessionId))
-    .flatMap((t) => fromTranscript(t, deps))
+    .flatMap((t) => fromTranscript(t, resolved, canonical))
 
   return {
     sessions: [...live, ...historical].toSorted((a, b) => b.updatedAt - a.updatedAt),
@@ -72,12 +91,12 @@ function fromRegistry(
   e: RegistryEntry,
   transcript: TranscriptFile | undefined,
   projectsDir: string,
-  deps: DiscoverDeps,
+  canonical: (path: string) => string,
 ): DiscoveredSession {
   return {
     adapterId: ADAPTER_ID,
     sessionId: e.sessionId,
-    cwd: deps.canonicalPath(e.cwd),
+    cwd: canonical(e.cwd),
     pid: e.pid,
     procStart: e.procStart,
     startedAt: e.startedAt,
@@ -88,9 +107,11 @@ function fromRegistry(
     nativeStatus: e.status,
     kind: e.kind,
     name: e.name,
-    // The scan covers only the activity window, so a long-lived session whose
-    // transcript predates it still needs the direct lookup.
+    // The direct lookup is the fallback for a transcript the scan could not
+    // see at all — an unreadable project directory, or a race with Claude Code
+    // creating the file between the scan and now.
     transcriptPath: transcript?.path ?? findTranscript(projectsDir, e.cwd, e.sessionId),
+    transcriptMtimeMs: transcript?.mtimeMs ?? null,
   }
 }
 
@@ -100,8 +121,12 @@ function fromRegistry(
  * lifecycle reconciliation reads `pid === null` as "no registry file", which
  * is precisely the evidence we have.
  */
-function fromTranscript(t: TranscriptFile, deps: DiscoverDeps): DiscoveredSession[] {
-  const cwd = resolveSlug(t.slug, { subdirs: deps.subdirs })
+function fromTranscript(
+  t: TranscriptFile,
+  resolved: (slug: string) => string | null,
+  canonical: (path: string) => string,
+): DiscoveredSession[] {
+  const cwd = resolved(t.slug)
   // An unresolvable slug means no such directory exists any more (temp dirs,
   // deleted checkouts). Such a project is dropped by `shouldInclude`'s
   // cwdExists rule anyway, so skipping here loses nothing a user would see.
@@ -109,7 +134,7 @@ function fromTranscript(t: TranscriptFile, deps: DiscoverDeps): DiscoveredSessio
   return [{
     adapterId: ADAPTER_ID,
     sessionId: t.sessionId,
-    cwd: deps.canonicalPath(cwd),
+    cwd: canonical(cwd),
     pid: null,
     procStart: null,
     startedAt: t.birthtimeMs,
@@ -118,10 +143,23 @@ function fromTranscript(t: TranscriptFile, deps: DiscoverDeps): DiscoveredSessio
     kind: 'interactive',
     name: '',
     transcriptPath: t.path,
+    transcriptMtimeMs: t.mtimeMs,
   }]
 }
 
 export { slugifyCwd }
+
+/** One CLI invocation's worth of answers; a stale entry is never reachable. */
+function memoize<T>(fn: (key: string) => T): (key: string) => T {
+  const cache = new Map<string, T>()
+  return (key) => {
+    const hit = cache.get(key)
+    if (hit !== undefined || cache.has(key)) return hit as T
+    const value = fn(key)
+    cache.set(key, value)
+    return value
+  }
+}
 
 function findTranscript(projectsDir: string, cwd: string, sessionId: string): string | null {
   const candidate = join(projectsDir, slugifyCwd(cwd), `${sessionId}.jsonl`)

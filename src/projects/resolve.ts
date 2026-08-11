@@ -23,11 +23,18 @@ export function resolveTarget(
   const q = query.trim().toLowerCase()
   if (q === '') return { kind: 'notfound' }
 
-  const exact = projects.filter((p) => p.name.toLowerCase() === q)
-  const partial = projects.filter((p) => p.name.toLowerCase().includes(q))
-  // Exact wins outright, otherwise `data-svc-2.0` would be dragged into
-  // ambiguity by `data-svc-2.0-clone` merely containing it.
-  const matched = exact.length > 0 ? exact : partial
+  // Tried in order, first non-empty tier wins. Exact beats partial, otherwise
+  // `data-svc-2.0` would be dragged into ambiguity by `data-svc-2.0-clone`
+  // merely containing it. Paths are tried after names because names are what
+  // the user types — but they must be tried, since `labelsOf` hands back full
+  // paths to disambiguate and a candidate you cannot retype is a dead end.
+  const tiers = [
+    projects.filter((p) => p.name.toLowerCase() === q),
+    projects.filter((p) => p.path.toLowerCase() === q),
+    projects.filter((p) => p.name.toLowerCase().includes(q)),
+    projects.filter((p) => p.path.toLowerCase().includes(q)),
+  ]
+  const matched = tiers.find((t) => t.length > 0) ?? []
   if (matched.length === 1) return { kind: 'project', project: matched[0] as ProjectView }
   if (matched.length > 1) return { kind: 'ambiguous', candidates: labelsOf(matched) }
 

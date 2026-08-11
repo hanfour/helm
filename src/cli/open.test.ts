@@ -165,6 +165,33 @@ test('--no-brief 時不產生簡報也不呼叫 LLM，但仍開終端機', async
   assert.equal(r.scripts.length, 1)
 })
 
+test('--no-brief 時開場訊息不得指向任何簡報檔', async () => {
+  // 沒寫簡報卻叫 session 去讀那個路徑：檔案不存在時是一句無意義的指令，
+  // 檔案存在時更糟 —— 那是上一次 helm open 留下的舊簡報，Claude 會照著
+  // 一份過期的計畫接續，而且沒有任何跡象顯示它過期了。
+  const home = scaffold('proj', [{ id: A }])
+  const r = await run(home, ['proj', '--no-brief'])
+  assert.equal(r.code, 0)
+  const script = r.scripts[0] ?? ''
+  assert.ok(!script.includes('.md'), `開場訊息不該提到簡報檔：${script}`)
+  assert.ok(script.includes('claude --resume'))
+})
+
+test('--no-brief 時即使磁碟上有舊簡報也不指向它', async () => {
+  const home = scaffold('proj', [{ id: A }])
+  await run(home, ['proj'])
+  const stale = readFileSync(join(home, '.helm', 'briefs', `${A}.md`), 'utf8')
+  assert.match(stale, /補測試/, '前置條件：第一次呼叫確實留下了簡報')
+  const r = await run(home, ['proj', '--no-brief'])
+  assert.ok(!(r.scripts[0] ?? '').includes('.md'))
+})
+
+test('--no-brief 時輸出不宣稱簡報已產生', async () => {
+  const home = scaffold('proj', [{ id: A }])
+  const r = await run(home, ['proj', '--no-brief'])
+  assert.ok(!r.out.includes('簡報'), `不該提簡報：${r.out}`)
+})
+
 test('專案底下有多個還在跑的 session 時列出來讓使用者選，不自動挑', async () => {
   const home = scaffold('proj', [
     { id: A, pid: process.pid, status: 'busy' },

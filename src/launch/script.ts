@@ -14,13 +14,28 @@ export function shellQuote(s: string): string {
   return `'${s.split("'").join(`'\\''`)}'`
 }
 
+/** Control characters that cannot appear literally inside an AppleScript string. */
+const CONTROL: readonly (readonly [string, string])[] = [
+  ['\n', '\\n'],
+  ['\r', '\\r'],
+  ['\t', '\\t'],
+]
+
 /**
- * AppleScript string literal. Backslashes must be doubled before quotes are
- * escaped — the other order turns an input `\"` into a backslash escaping the
- * backslash we just added, and the quote goes unescaped.
+ * AppleScript string literal. Backslashes must be doubled first — any other
+ * order would double the backslashes this function itself introduces.
+ *
+ * Newlines matter as much as quotes here: macOS allows them in directory
+ * names, and a literal one splits `do script "…"` across two lines, so the
+ * script fails to compile and the user gets a wall of osascript output for a
+ * path helm found on its own.
  */
 export function appleScriptQuote(s: string): string {
-  return `"${s.split('\\').join('\\\\').split('"').join('\\"')}"`
+  const escaped = CONTROL.reduce(
+    (acc, [ch, esc]) => acc.split(ch).join(esc),
+    s.split('\\').join('\\\\').split('"').join('\\"'),
+  )
+  return `"${escaped}"`
 }
 
 export function buildResumeCommand(

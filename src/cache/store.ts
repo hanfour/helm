@@ -16,6 +16,12 @@ export interface BriefEntry {
   /** `<byteSize>:<mtimeMs>` of the transcript when this brief was made. */
   digest: string
   generatedAt: number
+  /**
+   * Stored alongside the brief so a cache hit needs nothing but this entry.
+   * Without it the caller has to parse the whole transcript just to recover
+   * one string for the header — on the path that exists to avoid exactly that.
+   */
+  gitBranch: string | null
   body: Brief
 }
 
@@ -43,6 +49,9 @@ const CacheSchema = z.object({
   briefs: z.record(z.string(), z.object({
     digest: z.string().min(1),
     generatedAt: z.number(),
+    // Defaulted rather than required: caches written before this field existed
+    // are still perfectly good briefs and must not be thrown away.
+    gitBranch: z.string().nullable().default(null),
     body: BriefSchema,
   })).default({}),
   prs: z.record(z.string(), z.unknown()).default({}),

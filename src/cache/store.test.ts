@@ -32,7 +32,7 @@ test('毀損的快取回傳空結構，並把原檔搬到 .corrupt.json', () => 
 
 test('writeCache 寫出的內容可被 readCache 讀回', () => {
   const f = tmpFile()
-  const c = setBrief(EMPTY_CACHE, 's1', { digest: 'd1', generatedAt: 100, body: BRIEF })
+  const c = setBrief(EMPTY_CACHE, 's1', { digest: 'd1', generatedAt: 100, gitBranch: null, body: BRIEF })
   writeCache(f, c)
   assert.deepEqual(readCache(f), c)
 })
@@ -40,24 +40,24 @@ test('writeCache 寫出的內容可被 readCache 讀回', () => {
 test('setBrief 回傳新物件且不修改原物件', () => {
   const before = EMPTY_CACHE
   const snapshot = structuredClone(before)
-  const after = setBrief(before, 's1', { digest: 'd1', generatedAt: 1, body: BRIEF })
+  const after = setBrief(before, 's1', { digest: 'd1', generatedAt: 1, gitBranch: null, body: BRIEF })
   assert.deepEqual(before, snapshot)
   assert.equal(after.briefs['s1']?.digest, 'd1')
 })
 
 test('getFreshBriefEntry 在 digest 相符時回傳整筆快取（含產生時間）', () => {
-  const c = setBrief(EMPTY_CACHE, 's1', { digest: 'd1', generatedAt: 100, body: BRIEF })
+  const c = setBrief(EMPTY_CACHE, 's1', { digest: 'd1', generatedAt: 100, gitBranch: null, body: BRIEF })
   assert.deepEqual(getFreshBriefEntry(c, 's1', 'd1')?.body, BRIEF)
   assert.equal(getFreshBriefEntry(c, 's1', 'd1')?.generatedAt, 100)
 })
 
 test('getFreshBriefEntry 在 digest 不符時回傳 null（已 stale）', () => {
-  const c = setBrief(EMPTY_CACHE, 's1', { digest: 'd1', generatedAt: 1, body: BRIEF })
+  const c = setBrief(EMPTY_CACHE, 's1', { digest: 'd1', generatedAt: 1, gitBranch: null, body: BRIEF })
   assert.equal(getFreshBriefEntry(c, 's1', 'd2'), null)
 })
 
 test('getFreshBriefEntry 在 digest 為 null 時回傳 null（無法確認新鮮度）', () => {
-  const c = setBrief(EMPTY_CACHE, 's1', { digest: 'd1', generatedAt: 1, body: BRIEF })
+  const c = setBrief(EMPTY_CACHE, 's1', { digest: 'd1', generatedAt: 1, gitBranch: null, body: BRIEF })
   assert.equal(getFreshBriefEntry(c, 's1', null), null)
 })
 

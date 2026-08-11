@@ -30,13 +30,18 @@ export function writeBriefFile(path: string, markdown: string): void {
  * Spec §9: the brief goes to a file and the resumed session is told to read
  * it. Pasting the whole brief in as the first message would poison the new
  * session's context with a wall of text before the user says anything.
+ *
+ * `briefPath` is null when no brief was written. Pointing at the path anyway
+ * would be wrong twice over: the file may not exist, and if it does it is a
+ * leftover from an earlier `helm open` — the session would resume from a stale
+ * plan with nothing to signal that it is stale.
  */
 export function openSession(
   session: SessionState,
-  briefPath: string,
+  briefPath: string | null,
   deps: LaunchDeps,
 ): void {
-  const opening = `讀 ${briefPath} 後接續`
+  const opening = briefPath === null ? '接續上次的工作' : `讀 ${briefPath} 後接續`
   const command = buildResumeCommand(session.adapterId, session.sessionId, opening)
   deps.runOsascript(buildLaunchScript(deps.term, session.cwd, command))
 }

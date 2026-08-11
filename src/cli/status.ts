@@ -17,13 +17,17 @@ export function collectStatus(
   nowMs: number,
   probe: ProcessProbe = queryProcesses,
 ): Board {
-  // One window for both stages: discovery uses it to bound the transcript scan,
-  // grouping uses it to decide which projects are still interesting. Two
-  // different numbers here would show projects with no sessions under them.
-  const { sessions, invalid } = discoverClaudeCode(
-    paths,
-    { windowDays: ACTIVITY_WINDOW_DAYS, nowMs },
-  )
+  const prefs = readPrefs(paths.prefsFile)
+  const { sessions, invalid } = discoverClaudeCode(paths, {
+    windowDays: ACTIVITY_WINDOW_DAYS,
+    nowMs,
+    // Pinned projects are exempt from the window (spec §7), so the scan has to
+    // be told about them; filtering them out here would make that exemption
+    // unreachable further down.
+    alwaysInclude: Object.entries(prefs.projects)
+      .filter(([, p]) => p.pinned)
+      .map(([path]) => path),
+  })
   const alive = probe(sessions.flatMap((d) => (d.pid === null ? [] : [d.pid])))
   const states = reconcileSessions(sessions, {
     alive,
@@ -31,7 +35,7 @@ export function collectStatus(
     transcriptMtimeMs: mtimeMs,
   })
   const projects = groupIntoProjects(states, {
-    prefs: readPrefs(paths.prefsFile),
+    prefs,
     nowMs,
     cwdExists: existsSync,
     isGitRepo: (p) => existsSync(join(p, '.git')),

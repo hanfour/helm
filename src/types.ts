@@ -28,6 +28,12 @@ export interface DiscoveredSession {
   kind: string
   name: string
   transcriptPath: string | null
+  /**
+   * Carried from the directory scan that already stat'ed this file. Null when
+   * the path came from somewhere that did not stat it; reconciliation then
+   * falls back to asking the filesystem.
+   */
+  transcriptMtimeMs: number | null
 }
 
 /** Contents of ~/.helm/live/<session_id>.json — always a single line. */

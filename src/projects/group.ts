@@ -31,10 +31,16 @@ export function groupIntoProjects(
   sessions: readonly SessionState[],
   deps: GroupDeps,
 ): ProjectView[] {
-  const byPath = sessions.reduce<Map<string, SessionState[]>>(
-    (acc, s) => new Map(acc).set(s.cwd, [...(acc.get(s.cwd) ?? []), s]),
-    new Map(),
-  )
+  // Immutability applies to what crosses this function's boundary, not to a
+  // local accumulator that never escapes it. Copying the whole map once per
+  // session made grouping quadratic — 499 sessions meant ~124,000 entry copies
+  // on a path `helm menu` runs every 5 seconds.
+  const byPath = new Map<string, SessionState[]>()
+  for (const s of sessions) {
+    const group = byPath.get(s.cwd)
+    if (group === undefined) byPath.set(s.cwd, [s])
+    else group.push(s)
+  }
 
   return [...byPath.entries()]
     .map(([path, group]): ProjectView => ({

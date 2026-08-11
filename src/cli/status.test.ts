@@ -1,6 +1,6 @@
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { resolvePaths } from '../paths.ts'
@@ -95,3 +95,43 @@ function fmtLocal(d: Date): string {
   return `${days[d.getDay()]} ${months[d.getMonth()]} ${d.getDate()} ` +
          `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())} ${d.getFullYear()}`
 }
+
+test('釘選的專案即使超過 14 天沒有活動仍列得出來', () => {
+  // shouldInclude 的 pinned 例外只有在該專案的 session 進得了探索結果時才走得到。
+  // 探索若先用同一個 14 天窗口把 transcript 濾掉，那條例外永遠是死碼，
+  // 而使用者會看到自己明確釘選的專案默默消失。
+  const home = mkdtempSync(join(SCRATCH_ROOT, 'helm-pinned-'))
+  const cwd = join(home, 'side-project')
+  mkdirSync(join(cwd, '.git'), { recursive: true })
+  mkdirSync(join(home, '.claude', 'sessions'), { recursive: true })
+  const dir = join(home, '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'))
+  mkdirSync(dir, { recursive: true })
+  const transcript = join(dir, 'aaaa1111-0000-1111-2222-333344445555.jsonl')
+  writeFileSync(transcript, '{}\n')
+  const longAgo = (NOW - 20 * 86_400_000) / 1000
+  utimesSync(transcript, longAgo, longAgo)
+
+  mkdirSync(join(home, '.helm'), { recursive: true })
+  writeFileSync(
+    join(home, '.helm', 'projects.json'),
+    JSON.stringify({ version: 1, projects: { [cwd]: { pinned: true, hidden: false } } }),
+  )
+
+  const out = collectStatus(resolvePaths({ home }), NOW, () => new Map())
+  assert.deepEqual(out.projects.map((p) => p.name), ['side-project'])
+})
+
+test('沒有釘選的專案超過 14 天沒活動就不列出 —— 窗口本身仍然有效', () => {
+  const home = mkdtempSync(join(SCRATCH_ROOT, 'helm-stale-'))
+  const cwd = join(home, 'old-project')
+  mkdirSync(join(cwd, '.git'), { recursive: true })
+  mkdirSync(join(home, '.claude', 'sessions'), { recursive: true })
+  const dir = join(home, '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'))
+  mkdirSync(dir, { recursive: true })
+  const transcript = join(dir, 'bbbb2222-0000-1111-2222-333344445555.jsonl')
+  writeFileSync(transcript, '{}\n')
+  const longAgo = (NOW - 20 * 86_400_000) / 1000
+  utimesSync(transcript, longAgo, longAgo)
+
+  assert.deepEqual(collectStatus(resolvePaths({ home }), NOW, () => new Map()).projects, [])
+})

@@ -11,7 +11,7 @@ const sess = (over: Partial<SessionState>): SessionState => ({
   adapterId: 'claude-code', sessionId: 'abcdef12-3456-7890-abcd-ef1234567890',
   cwd: '/Users/testuser/proj', pid: 1, procStart: null, startedAt: 0,
   updatedAt: NOW - 5 * 60_000, nativeStatus: 'idle', kind: 'interactive',
-  name: 'proj-01', transcriptPath: null, lifecycle: 'running',
+  name: 'proj-01', transcriptPath: null, transcriptMtimeMs: null, lifecycle: 'running',
   lifecycleConfidence: 'high', live: null, ...over,
 })
 

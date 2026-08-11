@@ -29,12 +29,21 @@ const EXT = '.jsonl'
  * Measured cost of the full top-level scan on a real machine (499 files,
  * 28 project directories): 6.9 ms.
  */
-export function scanTranscripts(projectsDir: string, sinceMs: number): TranscriptFile[] {
-  return listDirs(projectsDir).flatMap((slug) =>
-    listTranscripts(join(projectsDir, slug)).flatMap((name) => {
+export function scanTranscripts(
+  projectsDir: string,
+  sinceMs: number,
+  alwaysSlugs: ReadonlySet<string> = new Set(),
+): TranscriptFile[] {
+  return listDirs(projectsDir).flatMap((slug) => {
+    // A pinned project is exempt from the activity window by definition
+    // (spec §7). Deciding that here rather than downstream is what keeps the
+    // exemption reachable at all — anything dropped by the scan can never be
+    // rescued by a later rule.
+    const always = alwaysSlugs.has(slug.toLowerCase())
+    return listTranscripts(join(projectsDir, slug)).flatMap((name) => {
       const path = join(projectsDir, slug, name)
       const stats = statOf(path)
-      if (stats === null || stats.mtimeMs < sinceMs) return []
+      if (stats === null || (!always && stats.mtimeMs < sinceMs)) return []
       return [{
         slug,
         sessionId: name.slice(0, -EXT.length),
@@ -42,8 +51,8 @@ export function scanTranscripts(projectsDir: string, sinceMs: number): Transcrip
         mtimeMs: stats.mtimeMs,
         birthtimeMs: stats.birthtimeMs,
       }]
-    }),
-  )
+    })
+  })
 }
 
 function listDirs(dir: string): string[] {

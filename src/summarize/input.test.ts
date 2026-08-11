@@ -7,7 +7,7 @@ import type { TranscriptDigest } from '../adapters/claude-code/transcript.ts'
 const session: SessionState = {
   adapterId: 'claude-code', sessionId: 's1', cwd: '/Users/testuser/proj', pid: 1,
   procStart: null, startedAt: 0, updatedAt: 0, nativeStatus: null,
-  kind: 'interactive', name: 'proj-01', transcriptPath: '/t/s1.jsonl',
+  kind: 'interactive', name: 'proj-01', transcriptPath: '/t/s1.jsonl', transcriptMtimeMs: null,
   lifecycle: 'crashed', lifecycleConfidence: 'high', live: null,
 }
 

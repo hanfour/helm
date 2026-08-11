@@ -30,27 +30,21 @@ export async function runOpen(
   const session = pickSession(hit, (m) => process.stderr.write(m))
   if (session === null) return 1
 
-  const briefPath = briefPathFor(paths.helmBriefs, session.sessionId)
-  if (!argv.includes('--no-brief')) {
-    const outcome = await briefMarkdownFor(session, paths, deps.run, {
-      refresh: argv.includes('--refresh'),
-      notify: (m) => process.stderr.write(m),
-      now: Date.now,
-    })
-    writeBriefFile(briefPath, outcome.markdown)
-  }
+  const briefPath = argv.includes('--no-brief')
+    ? null
+    : await writeBrief(session, paths, deps, argv.includes('--refresh'))
 
   try {
     openSession(session, briefPath, deps.launch())
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    process.stderr.write(
-      `開啟終端機失敗：${msg}\n簡報已寫到 ${briefPath}，可自行開終端機接續。\n`,
-    )
+    const where = briefPath === null ? '' : `簡報已寫到 ${briefPath}，`
+    process.stderr.write(`開啟終端機失敗：${msg}\n${where}可自行開終端機接續。\n`)
     return 1
   }
 
-  process.stdout.write(`已開啟 ${session.cwd}（簡報：${briefPath}）\n`)
+  const note = briefPath === null ? '' : `（簡報：${briefPath}）`
+  process.stdout.write(`已開啟 ${session.cwd}${note}\n`)
   return 0
 }
 
@@ -75,6 +69,22 @@ function pickSession(hit: TargetHit, write: (m: string) => void): SessionState |
   const chosen = live[0] ?? hit.project.sessions[0] ?? null
   if (chosen === null) write(`專案 ${hit.project.name} 底下沒有 session 可以接續。\n`)
   return chosen
+}
+
+async function writeBrief(
+  session: SessionState,
+  paths: ReturnType<typeof currentPaths>,
+  deps: OpenDeps,
+  refresh: boolean,
+): Promise<string> {
+  const path = briefPathFor(paths.helmBriefs, session.sessionId)
+  const outcome = await briefMarkdownFor(session, paths, deps.run, {
+    refresh,
+    notify: (m) => process.stderr.write(m),
+    now: Date.now,
+  })
+  writeBriefFile(path, outcome.markdown)
+  return path
 }
 
 function listLive(projectName: string, live: readonly SessionState[]): string {

@@ -87,7 +87,8 @@ function fmtLocal(d: Date): string {
 const session = (over: Partial<DiscoveredSession> = {}): DiscoveredSession => ({
   adapterId: 'claude-code', sessionId: 's1', cwd: '/p', pid: 111,
   procStart: PROC_START, startedAt: 1, updatedAt: 2, nativeStatus: 'idle',
-  kind: 'interactive', name: 'n', transcriptPath: '/t/s1.jsonl', ...over,
+  kind: 'interactive', name: 'n', transcriptPath: '/t/s1.jsonl',
+  transcriptMtimeMs: null, ...over,
 })
 
 test('reconcileSessions 為每個 session 附上 lifecycle 與 live', () => {

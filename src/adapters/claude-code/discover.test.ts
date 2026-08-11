@@ -8,7 +8,7 @@ import { discoverClaudeCode, type DiscoverDeps } from './discover.ts'
 
 const NOW = Date.UTC(2026, 7, 11, 12, 0, 0)
 const DAY = 86_400_000
-const OPTS = { windowDays: 14, nowMs: NOW }
+const OPTS = { windowDays: 14, nowMs: NOW, alwaysInclude: [] as string[] }
 
 /** Keeps the merge logic under test instead of the real filesystem layout. */
 const deps = (tree: Record<string, string[]> = {}): DiscoverDeps => ({
@@ -145,7 +145,7 @@ test('註冊表與 transcript 的活動時間取較新的那個', () => {
   assert.ok((s?.updatedAt ?? 0) > NOW - 3600_000)
 })
 
-test('超出時間窗口的 transcript 不列入', () => {
+test('超出窗口的 transcript 預設不列入', () => {
   const home = scaffold([], [
     { slug: SLUG, sessionId: 'fresh', ageMs: DAY },
     { slug: SLUG, sessionId: 'ancient', ageMs: 30 * DAY },
@@ -154,7 +154,29 @@ test('超出時間窗口的 transcript 不列入', () => {
   assert.deepEqual(found.sessions.map((s) => s.sessionId), ['fresh'])
 })
 
-test('註冊表中的 session 即使 transcript 很舊也不會被窗口濾掉 —— 它還活著', () => {
+test('alwaysInclude 指名的路徑不受窗口限制 —— 釘選的例外要在這裡就生效', () => {
+  // 探索階段丟掉的東西，下游任何規則都救不回來。shouldInclude 的 pinned
+  // 例外能不能走到，取決於這裡。
+  const home = scaffold([], [{ slug: SLUG, sessionId: 'ancient', ageMs: 30 * DAY }])
+  const found = discoverClaudeCode(
+    resolvePaths({ home }),
+    { ...OPTS, alwaysInclude: ['/Users/testuser/proj'] },
+    deps(TREE),
+  )
+  assert.deepEqual(found.sessions.map((s) => s.sessionId), ['ancient'])
+})
+
+test('alwaysInclude 的大小寫差異不影響比對 —— macOS 檔案系統大小寫不敏感', () => {
+  const home = scaffold([], [{ slug: SLUG, sessionId: 'ancient', ageMs: 30 * DAY }])
+  const found = discoverClaudeCode(
+    resolvePaths({ home }),
+    { ...OPTS, alwaysInclude: ['/Users/TestUser/Proj'] },
+    deps(TREE),
+  )
+  assert.deepEqual(found.sessions.map((s) => s.sessionId), ['ancient'])
+})
+
+test('註冊表中的 session 即使 transcript 很舊也照樣列出 —— 它還活著', () => {
   const home = scaffold([BASE], [{ slug: SLUG, sessionId: 'sess-a', ageMs: 30 * DAY }])
   const found = discoverClaudeCode(resolvePaths({ home }), OPTS, deps(TREE))
   assert.deepEqual(found.sessions.map((s) => s.sessionId), ['sess-a'])

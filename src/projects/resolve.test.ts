@@ -7,7 +7,7 @@ import type { SessionState } from '../types.ts'
 const sess = (over: Partial<SessionState>): SessionState => ({
   adapterId: 'claude-code', sessionId: 'aaaaaaaa-1111-2222-3333-444444444444',
   cwd: '/Users/u/proj', pid: null, procStart: null, startedAt: 0, updatedAt: 0,
-  nativeStatus: null, kind: 'interactive', name: '', transcriptPath: null,
+  nativeStatus: null, kind: 'interactive', name: '', transcriptPath: null, transcriptMtimeMs: null,
   lifecycle: 'ended_clean', lifecycleConfidence: 'high', live: null, ...over,
 })
 
@@ -96,6 +96,30 @@ test('session id 前綴撞到多個時同樣列出候選', () => {
 test('專案名優先於 session id —— 專案名才是主要用法', () => {
   const p = proj('abc', { sessions: [sess({ sessionId: 'abcdef00' })] })
   const r = resolveTarget([p], 'abc')
+  assert.equal(r.kind, 'project')
+})
+
+test('歧義訊息列出的完整路徑，必須真的能拿來再查一次', () => {
+  // labelsOf 在同名時改列路徑並叫使用者「打長一點」，但比對只看 basename ——
+  // 於是使用者照著貼上候選，得到的是 notfound。這是一條走不出去的死路。
+  const a = proj('api', { path: '/Users/u/a/api' })
+  const b = proj('api', { path: '/Users/u/b/api' })
+  const r = resolveTarget([a, b], '/Users/u/a/api')
+  assert.equal(r.kind, 'project')
+  assert.equal(r.kind === 'project' ? r.project.path : '', '/Users/u/a/api')
+})
+
+test('路徑的一部分也能用來消除歧義', () => {
+  const a = proj('api', { path: '/Users/u/a/api' })
+  const b = proj('api', { path: '/Users/u/b/api' })
+  const r = resolveTarget([a, b], 'b/api')
+  assert.equal(r.kind, 'project')
+  assert.equal(r.kind === 'project' ? r.project.path : '', '/Users/u/b/api')
+})
+
+test('路徑比對不會讓原本單純的專案名查詢變成歧義', () => {
+  // /Users/u/acme/report-tool 的路徑含 'one'，不該讓查 'one' 時多冒出來。
+  const r = resolveTarget([proj('report-tool'), proj('token-service')], 'token-service')
   assert.equal(r.kind, 'project')
 })
 

@@ -64,6 +64,19 @@ test('appleScriptQuote 先跳脫反斜線再跳脫引號，順序反了會產生
   assert.equal(appleScriptQuote('a\\"b'), '"a\\\\\\"b"')
 })
 
+test('appleScriptQuote 跳脫換行 —— AppleScript 字串裡不能有真的換行', () => {
+  // macOS 允許目錄名含換行。未跳脫會讓 do script "..." 斷成兩行而編不過，
+  // 使用者看到的是一大段 osascript 錯誤，而那個路徑還是 helm 自己找出來的。
+  assert.equal(appleScriptQuote('a\nb'), '"a\\nb"')
+  assert.equal(appleScriptQuote('a\rb'), '"a\\rb"')
+  assert.equal(appleScriptQuote('a\tb'), '"a\\tb"')
+})
+
+test('路徑含換行時 AppleScript 仍編譯得過', () => {
+  assert.ok(compiles(buildLaunchScript('terminal', '/Users/t/a\nb', 'echo ok')))
+  assert.ok(compiles(buildLaunchScript('iterm', '/Users/t/a\nb', 'echo ok')))
+})
+
 test('buildResumeCommand 產生 claude --resume 加位置參數', () => {
   const c = buildResumeCommand('claude-code', 'sess-1', '讀 /tmp/b.md 後接續')
   assert.match(c, /claude --resume 'sess-1' '讀 \/tmp\/b\.md 後接續'/)

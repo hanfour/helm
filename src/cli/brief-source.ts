@@ -1,4 +1,4 @@
-import { readTranscriptDigest } from '../adapters/claude-code/transcript.ts'
+import { readTranscriptDigest, type TranscriptDigest } from '../adapters/claude-code/transcript.ts'
 import type { Brief } from '../cache/store.ts'
 import { digestOf, getFreshBriefEntry, readCache, setBrief, writeCache } from '../cache/store.ts'
 import type { HelmPaths } from '../paths.ts'
@@ -33,15 +33,25 @@ export async function briefMarkdownFor(
   run: ClaudeRunner,
   req: BriefRequest,
 ): Promise<BriefOutcome> {
-  const digest = readTranscriptDigest(session.transcriptPath ?? '')
+  // The cache is consulted before the transcript is opened. `digestOf` is one
+  // statSync; `readTranscriptDigest` pulls a file measured at 8.6 MB into
+  // memory and zod-parses every line. Doing that first meant every cache hit —
+  // the common case — paid the entire slow path to recover one branch name.
   const fingerprint = digestOf(session.transcriptPath)
   const cache = readCache(paths.cacheFile)
   const cached = req.refresh
     ? null
     : getFreshBriefEntry(cache, session.sessionId, fingerprint)
-
   if (cached !== null) {
-    return { markdown: render(session, digest.gitBranch, cached.body, cached.generatedAt), ok: true }
+    return {
+      markdown: render(session, cached.gitBranch, cached.body, cached.generatedAt),
+      ok: true,
+    }
+  }
+
+  const digest = readTranscriptDigest(session.transcriptPath ?? '')
+  if (nothingToSummarize(session, digest)) {
+    return { markdown: renderNothingToSummarize(), ok: false }
   }
 
   warnBeforeSpending(session, req.notify)
@@ -55,10 +65,35 @@ export async function briefMarkdownFor(
   if (fingerprint !== null) {
     writeCache(
       paths.cacheFile,
-      setBrief(cache, session.sessionId, { digest: fingerprint, generatedAt, body: brief }),
+      setBrief(cache, session.sessionId, {
+        digest: fingerprint, generatedAt, gitBranch: digest.gitBranch, body: brief,
+      }),
     )
   }
   return { markdown: render(session, digest.gitBranch, brief, generatedAt), ok: true }
+}
+
+/**
+ * A session with no transcript, or one that never got past its first turn, has
+ * nothing for the model to read. Asking anyway costs the measured 57-86 s for
+ * a prompt whose every section is `（無）`, and because the fingerprint is null
+ * the answer can never be cached — so the same minute is spent again on every
+ * single retry.
+ */
+function nothingToSummarize(session: SessionState, digest: TranscriptDigest): boolean {
+  if (session.transcriptPath === null) return true
+  return digest.prompts.length === 0 && digest.recentTools.length === 0
+}
+
+/** Distinct from `renderFallback`: nothing failed here, there was nothing to do. */
+function renderNothingToSummarize(): string {
+  return [
+    '這個 session 沒有可以做成簡報的內容。',
+    '',
+    '找不到它的 transcript，或裡面還沒有任何對話與工具呼叫。',
+    '（沒有向模型發問，因此沒有產生任何花費）',
+    '',
+  ].join('\n')
 }
 
 function render(

@@ -66,7 +66,13 @@ export interface ReconcileDeps {
   /** pid → raw `ps` lstart string. Absent key means the PID is dead. */
   alive: Map<number, string>
   readLive: (sessionId: string) => LiveMarker | null
+  /** Only consulted when the session did not already carry an mtime. */
   transcriptMtimeMs: (path: string) => number | null
+}
+
+function mtimeOf(s: DiscoveredSession, deps: ReconcileDeps): number | null {
+  if (s.transcriptMtimeMs !== null) return s.transcriptMtimeMs
+  return s.transcriptPath === null ? null : deps.transcriptMtimeMs(s.transcriptPath)
 }
 
 export function reconcileSessions(
@@ -84,8 +90,9 @@ export function reconcileSessions(
       psLstart,
       procStart: s.procStart,
       live,
-      transcriptMtimeMs:
-        s.transcriptPath === null ? null : deps.transcriptMtimeMs(s.transcriptPath),
+      // Discovery already stat'ed these files. Re-statting every one of them
+      // here doubled the syscalls on a path `helm menu` runs every 5 seconds.
+      transcriptMtimeMs: mtimeOf(s, deps),
     })
     return { ...s, lifecycle: verdict.lifecycle, lifecycleConfidence: verdict.confidence, live }
   })
