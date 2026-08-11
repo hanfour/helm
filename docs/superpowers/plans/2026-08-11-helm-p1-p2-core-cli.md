@@ -966,8 +966,10 @@ git commit -m "feat: 行程存活性查詢與 session 探索"
 - Produces:
   - `readLiveMarker(liveDir: string, sessionId: string): LiveMarker | null`
   - `decideLifecycle(input: LifecycleInput): { lifecycle: Lifecycle; confidence: Confidence }`
-  - `reconcileSessions(sessions, deps): SessionState[]`，其中
-    `deps = { alive: Map<number, string>; liveDir: string; transcriptMtimeMs: (path: string) => number | null }`
+  - `reconcileSessions(sessions: readonly DiscoveredSession[], deps: ReconcileDeps): SessionState[]`
+  - `interface ReconcileDeps { alive: Map<number, string>; readLive: (sessionId: string) => LiveMarker | null; transcriptMtimeMs: (path: string) => number | null }`
+    （注意是 `readLive` 這個函式，不是 `liveDir` 字串 —— Task 6 的 `collectStatus` 會傳入
+    `(id) => readLiveMarker(paths.helmLive, id)` 這個 closure）
   - `interface LifecycleInput { registryFileExists: boolean; pidAlive: boolean; psLstart: string | null; procStart: string | null; live: LiveMarker | null; transcriptMtimeMs: number | null }`
 
 - [ ] **Step 1: 寫 lifecycle 判定的失敗測試**
@@ -1071,7 +1073,7 @@ Expected: FAIL，找不到模組 `./lifecycle.ts`
 
 ```ts
 import type { Confidence, Lifecycle, LiveMarker } from '../types.ts'
-import { procStartMatches } from '../adapters/claude-code/processes.ts'
+import { parseLstart, procStartMatches } from '../adapters/claude-code/processes.ts'
 
 export interface LifecycleInput {
   /** Whether ~/.claude/sessions/<pid>.json still exists. */
@@ -1116,8 +1118,10 @@ function fromRegistry(input: LifecycleInput): LifecycleVerdict {
     return { lifecycle: 'running', confidence: 'high' }
   }
   // Distinguish "genuinely a different process" from "we failed to parse".
-  const unparseable = !/^\w{3}\s+\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4}$/
-    .test(input.psLstart.trim().replace(/\s+/g, ' '))
+  // Ask the canonical parser rather than re-deriving its rules: a second
+  // format check would drift from `parseLstart` and mislabel confidence in
+  // both directions.
+  const unparseable = parseLstart(input.psLstart) === null
   return { lifecycle: 'crashed', confidence: unparseable ? 'low' : 'high' }
 }
 
