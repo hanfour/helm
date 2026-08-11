@@ -166,6 +166,7 @@ import { resolvePaths } from './paths.ts'
 
 test('resolvePaths 由 home 推導出全部預設路徑', () => {
   const p = resolvePaths({ home: '/tmp/fakehome' })
+  assert.equal(p.home, '/tmp/fakehome')
   assert.equal(p.claudeSessions, '/tmp/fakehome/.claude/sessions')
   assert.equal(p.claudeProjects, '/tmp/fakehome/.claude/projects')
   assert.equal(p.helmLive, '/tmp/fakehome/.helm/live')
@@ -244,9 +245,11 @@ Expected: PASS，3 個測試全過
 
 從本機真實資料擷取並匿名化。真實資料含使用者名稱與專案內容，必須替換。
 
+**注意兩個容易踩的地方**：註解一律用英文（Global Constraints 要求；`echo` 給使用者看的訊息才用中文）；挑最大檔的 pipeline 必須避開 SIGPIPE —— `... | head -1` 在 `set -o pipefail` 下，當上游還在寫時被 `head` 關掉讀取端會回傳非零，讓 `set -e` 中止整支腳本。實測：3 個 `.jsonl` 時正常，5000 個時腳本會提前死掉。修法用 subshell 只對這條 pipeline 關掉 `pipefail`，**不要用 `|| true`** —— 那會連帶吞掉 `find` 真正的失敗，讓腳本靜默跳過 transcript fixture。
+
 ```bash
 #!/usr/bin/env bash
-# 從本機真實 Claude Code 資料建立測試 fixture，並將使用者名稱匿名化。
+# Build test fixtures from this machine's real Claude Code data, anonymized.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 SRC_SESSIONS="$HOME/.claude/sessions"
@@ -256,7 +259,7 @@ REAL_USER="$(basename "$HOME")"
 rm -rf "$ROOT/claude"
 mkdir -p "$ROOT/claude/sessions"
 
-# 1. 註冊表：取最多 3 個，將 home 路徑與使用者名稱換掉
+# 1. Registry: take up to 3 files, rewriting the home path and username.
 n=0
 for f in "$SRC_SESSIONS"/*.json; do
   [ -f "$f" ] || continue
@@ -265,8 +268,12 @@ for f in "$SRC_SESSIONS"/*.json; do
   n=$((n+1)); [ $n -ge 3 ] && break
 done
 
-# 2. Transcript：取最大的一份的頭 200 行與尾 200 行，保留結構但縮小體積
-big=$(find "$SRC_PROJECTS" -name '*.jsonl' -type f -print0 \
+# 2. Transcript: head+tail of the largest one — keeps the shape, cuts the size.
+#    pipefail is disabled for just this pipeline: `head -1` closes the read end
+#    early, which SIGPIPEs `ls` and would otherwise abort the script under `set -e`.
+#    Do not use `|| true` here — that would also swallow a genuine `find` failure.
+big=$(set +o pipefail
+      find "$SRC_PROJECTS" -name '*.jsonl' -type f -print0 \
       | xargs -0 ls -S 2>/dev/null | head -1)
 if [ -n "$big" ]; then
   slug=$(basename "$(dirname "$big")" | sed "s|$REAL_USER|testuser|g")
@@ -280,6 +287,13 @@ fi
 echo "註冊表 fixture: $n 個"
 echo "提醒：fixtures/claude/ 已列入 .gitignore，內容不會進版控。"
 ```
+
+驗證這支腳本不會提前中止（`set -e` 的 SIGPIPE 陷阱）：
+
+```bash
+bash fixtures/make.sh; echo "exit=$?"
+```
+Expected: 兩行「fixture:」訊息都印出來且 `exit=0`。若最後的 echo 沒印出來，就是踩到上述 pipeline 問題。
 
 執行 `chmod +x fixtures/make.sh && bash fixtures/make.sh`，確認產出檔案存在。
 
