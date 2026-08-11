@@ -18,10 +18,17 @@ export interface PrefsFile {
 
 const EMPTY: PrefsFile = { version: 1, projects: {} }
 
+/**
+ * `quarantined` and `unreadable` are deliberately different answers. The first
+ * means the original is safe on disk under another name; the second means it
+ * is still sitting there unusable and a write would destroy it. Collapsing the
+ * two is how a promise of "your original was preserved" becomes a lie.
+ */
+export type PrefsHealth = 'ok' | 'quarantined' | 'unreadable'
+
 export interface PrefsRead {
   prefs: PrefsFile
-  /** True when a file existed but could not be used; it has been set aside. */
-  corrupt: boolean
+  health: PrefsHealth
 }
 
 /**
@@ -35,30 +42,48 @@ export interface PrefsRead {
  * takes the same path for the same reason.
  */
 export function readPrefs(prefsFile: string): PrefsRead {
-  if (!existsSync(prefsFile)) return { prefs: EMPTY, corrupt: false }
+  if (!existsSync(prefsFile)) return { prefs: EMPTY, health: 'ok' }
   try {
     const parsed = PrefsSchema.safeParse(JSON.parse(readFileSync(prefsFile, 'utf8')))
-    if (parsed.success) return { prefs: { version: 1, projects: parsed.data.projects }, corrupt: false }
+    if (parsed.success) return { prefs: { version: 1, projects: parsed.data.projects }, health: 'ok' }
   } catch {
     // Falls through to quarantine — an unparseable file and a schema mismatch
     // both mean "we must not write over this".
   }
-  quarantine(prefsFile)
-  return { prefs: EMPTY, corrupt: true }
+  return { prefs: EMPTY, health: quarantine(prefsFile) ? 'quarantined' : 'unreadable' }
 }
 
-function quarantine(prefsFile: string): void {
+/**
+ * Returns whether the original actually got out of the way. A rename needs
+ * write permission on the *directory*, while truncating an existing file does
+ * not — so "quarantine failed but the write will succeed" is a real state, and
+ * the one where silence costs the user everything they ever pinned or hid.
+ */
+function quarantine(prefsFile: string): boolean {
   try {
-    renameSync(prefsFile, prefsFile.replace(/\.json$/, '.corrupt.json'))
+    renameSync(prefsFile, quarantinePath(prefsFile))
+    return true
   } catch {
-    // Nothing more we can do; the caller still gets usable empty prefs, and
-    // `corrupt: true` means the user is told rather than silently reset.
+    // The caller is told `unreadable` and must refuse to write.
+    return false
   }
 }
 
+export function quarantinePath(prefsFile: string): string {
+  return prefsFile.replace(/\.json$/, '.corrupt.json')
+}
+
+/**
+ * Temp-then-rename, like the cache and settings.json. This file holds the only
+ * data helm cannot rebuild, yet it was the one writing in place: measured, 8
+ * concurrent `helm hide` runs produced a truncated file that the next read
+ * quarantined, taking all eight settings with it.
+ */
 export function writePrefs(prefsFile: string, prefs: PrefsFile): void {
   mkdirSync(dirname(prefsFile), { recursive: true })
-  writeFileSync(prefsFile, `${JSON.stringify(prefs, null, 2)}\n`, 'utf8')
+  const temp = `${prefsFile}.${process.pid}.tmp`
+  writeFileSync(temp, `${JSON.stringify(prefs, null, 2)}\n`, 'utf8')
+  renameSync(temp, prefsFile)
 }
 
 /** Returns a new PrefsFile; never mutates the input. */

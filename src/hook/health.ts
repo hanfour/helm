@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs
 import { join } from 'node:path'
 import type { Board } from '../board.ts'
 import type { HelmPaths } from '../paths.ts'
+import { quarantinePath } from '../projects/prefs.ts'
 import { hasHelmHook } from './settings.ts'
 
 const ORPHAN_MAX_AGE_MS = 30 * 86_400_000
@@ -88,12 +89,13 @@ function registryParse(paths: HelmPaths, board: Board): Check {
 }
 
 function prefsHealth(paths: HelmPaths, board: Board): Check {
+  if (board.prefsHealth === 'ok') return { name: '偏好檔', ok: true, detail: '正常' }
   return {
     name: '偏好檔',
-    ok: !board.prefsCorrupt,
-    detail: board.prefsCorrupt
-      ? `${paths.prefsFile} 無法解析，釘選與隱藏設定沒有生效。原檔已保留為 ${paths.prefsFile.replace(/\.json$/, '.corrupt.json')}。`
-      : '正常',
+    ok: false,
+    detail: board.prefsHealth === 'quarantined'
+      ? `${paths.prefsFile} 無法解析，原檔已保留為 ${quarantinePath(paths.prefsFile)}。修好後改回檔名即可。`
+      : `${paths.prefsFile} 無法解析且搬不開（目錄可能不可寫）。helm 不會寫入它 —— 請自行修好或移走該檔。`,
   }
 }
 

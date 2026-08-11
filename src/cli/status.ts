@@ -17,7 +17,7 @@ export function collectStatus(
   nowMs: number,
   probe: ProcessProbe = queryProcesses,
 ): Board {
-  const { prefs, corrupt: prefsCorrupt } = readPrefs(paths.prefsFile)
+  const { prefs, health: prefsHealth } = readPrefs(paths.prefsFile)
   const { sessions, invalid } = discoverClaudeCode(paths, {
     windowDays: ACTIVITY_WINDOW_DAYS,
     nowMs,
@@ -41,7 +41,7 @@ export function collectStatus(
     isGitRepo: (p) => existsSync(join(p, '.git')),
     home: paths.home,
   })
-  return { projects, invalid, prefsCorrupt }
+  return { projects, invalid, prefsHealth }
 }
 
 function mtimeMs(path: string): number | null {

@@ -25,7 +25,7 @@ const proj = (over: Partial<ProjectView> = {}): ProjectView => {
 }
 
 const board = (projects: ProjectView[], over: Partial<Board> = {}): Board =>
-  ({ projects, invalid: 0, prefsCorrupt: false, ...over })
+  ({ projects, invalid: 0, prefsHealth: 'ok' as const, ...over })
 
 const title = (out: string) => out.split('\n')[0] ?? ''
 const body = (out: string) => out.slice(out.indexOf('\n---\n'))
@@ -108,7 +108,7 @@ test('註冊表解析失敗時在選單裡明講，不靜默隱藏', () => {
 })
 
 test('偏好檔毀損時也在選單裡明講', () => {
-  assert.match(renderSwiftBar(board([proj()], { prefsCorrupt: true }), OPTS), /偏好檔/)
+  assert.match(renderSwiftBar(board([proj()], { prefsHealth: 'quarantined' as const }), OPTS), /偏好檔/)
 })
 
 test('pinned 專案顯示釘選記號', () => {

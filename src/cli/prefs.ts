@@ -1,6 +1,6 @@
 import { basename } from 'node:path'
 import type { HelmPaths } from '../paths.ts'
-import { readPrefs, setProjectPref, writePrefs } from '../projects/prefs.ts'
+import { quarantinePath, readPrefs, setProjectPref, writePrefs } from '../projects/prefs.ts'
 import { collectStatus, currentPaths } from './status.ts'
 import { resolveOrReport } from './target.ts'
 
@@ -25,10 +25,20 @@ export function runPrefs(action: PrefAction, argv: readonly string[]): number {
   }
 
   const paths = currentPaths()
-  const { prefs, corrupt } = readPrefs(paths.prefsFile)
-  if (corrupt) {
+  const { prefs, health } = readPrefs(paths.prefsFile)
+  if (health === 'unreadable') {
+    // The original is unusable *and* still sitting there. Writing now would
+    // truncate the one file helm cannot rebuild, so refuse and hand the user
+    // the decision instead.
     process.stderr.write(
-      `⚠ ${paths.prefsFile} 無法解析，原檔已保留為 ${paths.prefsFile.replace(/\.json$/, '.corrupt.json')}。\n` +
+      `${paths.prefsFile} 無法解析，而且搬不開它（目錄可能不可寫）。\n` +
+      '為了不覆蓋掉你先前的釘選與隱藏，這次不寫入。請自行修好或移走該檔後重試。\n',
+    )
+    return 1
+  }
+  if (health === 'quarantined') {
+    process.stderr.write(
+      `⚠ ${paths.prefsFile} 無法解析，原檔已保留為 ${quarantinePath(paths.prefsFile)}。\n` +
       '  這次的設定會寫進一個全新的檔案，先前的釘選與隱藏不會自動帶過來。\n',
     )
   }

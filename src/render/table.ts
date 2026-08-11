@@ -144,12 +144,11 @@ function renderInvalidWarning(invalid: number, opts: RenderOptions): string {
  * set them — so say it, and say where the original went.
  */
 function renderPrefsWarning(board: Board, opts: RenderOptions): string {
-  if (!board.prefsCorrupt) return ''
-  return dim(
-    '\n⚠ 偏好檔無法解析，這次的釘選與隱藏設定沒有生效。\n' +
-    '  原檔已保留為 ~/.helm/projects.corrupt.json，修好後改回檔名即可。\n',
-    opts.color,
-  )
+  if (board.prefsHealth === 'ok') return ''
+  const where = board.prefsHealth === 'quarantined'
+    ? '原檔已保留為同目錄下的 projects.corrupt.json，修好後改回檔名即可。'
+    : '原檔還在原地但搬不開（目錄可能不可寫），helm 不會寫入它 —— 請自行處理。'
+  return dim(`\n⚠ 偏好檔無法解析，這次的釘選與隱藏設定沒有生效。\n  ${where}\n`, opts.color)
 }
 
 function renderSummary(projects: readonly ProjectView[]): string {

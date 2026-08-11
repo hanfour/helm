@@ -29,7 +29,7 @@ const proj = (over: Partial<ProjectView>): ProjectView => {
 
 const opts = { color: false, nowMs: NOW }
 
-const res = (projects: ProjectView[], invalid = 0): Board => ({ projects, invalid, prefsCorrupt: false })
+const res = (projects: ProjectView[], invalid = 0): Board => ({ projects, invalid, prefsHealth: 'ok' as const })
 
 test('空清單顯示提示而非空字串', () => {
   assert.match(renderTable(res([]), opts), /沒有找到/)
@@ -178,7 +178,7 @@ test('全部都解析失敗時，空清單訊息也要說明原因', () => {
 
 test('偏好檔毀損時在輸出中明講，並告知原檔沒有被丟掉', () => {
   // 釘選與隱藏是使用者意圖，不可重建。靜默歸零會讓他以為自己沒設過。
-  const out = renderTable({ projects: [proj({})], invalid: 0, prefsCorrupt: true }, opts)
+  const out = renderTable({ projects: [proj({})], invalid: 0, prefsHealth: 'quarantined' as const }, opts)
   assert.match(out, /釘選|隱藏|偏好/)
   assert.match(out, /corrupt/)
 })
