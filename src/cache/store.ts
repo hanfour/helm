@@ -99,15 +99,19 @@ export function setBrief(cache: CacheShape, sessionId: string, entry: BriefEntry
   return { ...cache, briefs: { ...cache.briefs, [sessionId]: entry } }
 }
 
-/** Returns the cached brief only when it still matches the transcript. */
-export function getFreshBrief(
+/**
+ * Returns the whole cached entry, not just the brief, so callers can report
+ * when it was actually generated. Showing the current time on a cache hit
+ * would tell the user a two-day-old brief was written seconds ago.
+ */
+export function getFreshBriefEntry(
   cache: CacheShape,
   sessionId: string,
   digest: string | null,
-): Brief | null {
+): BriefEntry | null {
   if (digest === null) return null
   const entry = cache.briefs[sessionId]
-  return entry !== undefined && entry.digest === digest ? entry.body : null
+  return entry !== undefined && entry.digest === digest ? entry : null
 }
 
 /** Size plus mtime is enough: an append always changes size, an edit changes mtime. */

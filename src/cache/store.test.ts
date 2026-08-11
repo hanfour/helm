@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  readCache, writeCache, setBrief, getFreshBrief, digestOf, EMPTY_CACHE,
+  readCache, writeCache, setBrief, getFreshBriefEntry, digestOf, EMPTY_CACHE,
 } from './store.ts'
 import type { Brief } from './store.ts'
 
@@ -45,23 +45,24 @@ test('setBrief 回傳新物件且不修改原物件', () => {
   assert.equal(after.briefs['s1']?.digest, 'd1')
 })
 
-test('getFreshBrief 在 digest 相符時回傳簡報', () => {
-  const c = setBrief(EMPTY_CACHE, 's1', { digest: 'd1', generatedAt: 1, body: BRIEF })
-  assert.deepEqual(getFreshBrief(c, 's1', 'd1'), BRIEF)
+test('getFreshBriefEntry 在 digest 相符時回傳整筆快取（含產生時間）', () => {
+  const c = setBrief(EMPTY_CACHE, 's1', { digest: 'd1', generatedAt: 100, body: BRIEF })
+  assert.deepEqual(getFreshBriefEntry(c, 's1', 'd1')?.body, BRIEF)
+  assert.equal(getFreshBriefEntry(c, 's1', 'd1')?.generatedAt, 100)
 })
 
-test('getFreshBrief 在 digest 不符時回傳 null（已 stale）', () => {
+test('getFreshBriefEntry 在 digest 不符時回傳 null（已 stale）', () => {
   const c = setBrief(EMPTY_CACHE, 's1', { digest: 'd1', generatedAt: 1, body: BRIEF })
-  assert.equal(getFreshBrief(c, 's1', 'd2'), null)
+  assert.equal(getFreshBriefEntry(c, 's1', 'd2'), null)
 })
 
-test('getFreshBrief 在 digest 為 null 時回傳 null（無法確認新鮮度）', () => {
+test('getFreshBriefEntry 在 digest 為 null 時回傳 null（無法確認新鮮度）', () => {
   const c = setBrief(EMPTY_CACHE, 's1', { digest: 'd1', generatedAt: 1, body: BRIEF })
-  assert.equal(getFreshBrief(c, 's1', null), null)
+  assert.equal(getFreshBriefEntry(c, 's1', null), null)
 })
 
-test('getFreshBrief 對未快取的 session 回傳 null', () => {
-  assert.equal(getFreshBrief(EMPTY_CACHE, 'nope', 'd1'), null)
+test('getFreshBriefEntry 對未快取的 session 回傳 null', () => {
+  assert.equal(getFreshBriefEntry(EMPTY_CACHE, 'nope', 'd1'), null)
 })
 
 test('digestOf 對同一個未變動的檔案產生相同值', () => {

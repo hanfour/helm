@@ -4007,8 +4007,27 @@ git commit -m "feat: 交接簡報產生與 helm brief 指令"
 - Create: `src/cli/open.ts`
 - Modify: `src/cli/main.ts`（加入 `open` 子指令）
 
+### 因 Task 13 而過時之處（實作時修正）
+
+本節寫於 Task 13 之前，以下三點已不成立：
+
+1. **`resolveSession` 不存在了**。Task 13 用 `resolveOrReport`（`src/cli/target.ts`）取代它，
+   `helm open` 因此自動吃得下專案名，且歧義時列候選而非回傳第一個。
+2. **`collectStatus` 回傳的是 `Board` 不是陣列**。原稿的 `resolveSession(collectStatus(...), id)`
+   型別本來就不對。
+3. **必須實作 Task 13 訂下的規則**：「`helm open <專案>` 若發現該專案有超過一個活著的
+   session，列出來讓他選，不要自動挑。」原稿完全沒有這條。實作在 `pickSession`：
+   指名 session id → 開那個；專案有 >1 個 running → 列出候選並回傳 1；恰好 1 個 → 直接開；
+   0 個 → 開最近的那個（重開機後的主要用法）。
+
+另外原稿的 Step 6 把 `cli/brief.ts` 的快取／產生流程整段複製了一份，且**漏掉花費前告知**
+（那是 Task 9 review 的 Important 修正）。實作改為抽出 `src/cli/brief-source.ts` 共用，
+兩個指令的快取策略、成本警告與失敗退場因此不可能漂移。順帶把
+`getFreshBrief` 換成 `getFreshBriefEntry`，修掉 Task 9 留下的 deferred minor
+（快取命中時「產生時間」顯示的是檢視時間而非真正產生時間）。
+
 **Interfaces:**
-- Consumes: `SessionState` from Task 2；`Brief` from Task 8；`renderBriefMarkdown` from Task 9；`resolveSession` from Task 9；`collectStatus`, `currentPaths` from Task 6
+- Consumes: `SessionState` from Task 2；`Brief` from Task 8；`renderBriefMarkdown` from Task 9；`resolveOrReport` from Task 13；`collectStatus`, `currentPaths` from Task 6
 - Produces:
   - `type Terminal = 'iterm' | 'terminal'`
   - `shellQuote(s: string): string`
@@ -4043,12 +4062,16 @@ test('shellQuote 跳脫內嵌的單引號', () => {
   assert.equal(shellQuote("/Users/t/it's"), "'/Users/t/it'\\''s'")
 })
 
-test('shellQuote 讓注入嘗試失效', () => {
+// ⚠️ 原稿這個測試的斷言是錯的，實作時已替換。
+// `!quoted.includes("; rm -rf ~; echo ")` 必定失敗 —— 跳脫後那段字串本來就
+// 還在，只是變成純資料。「有沒有被當成指令」不是字串比對答得出來的問題。
+// 改成問 shell 本人：
+test('shellQuote 讓注入嘗試失效 —— 交給真的 shell 判定', () => {
   const evil = "/tmp'; rm -rf ~; echo '"
-  const quoted = shellQuote(evil)
-  // 整段仍是單一參數：跳脫後不存在未閉合的引號區段
-  assert.ok(quoted.startsWith("'") && quoted.endsWith("'"))
-  assert.ok(!quoted.includes("; rm -rf ~; echo "))
+  const back = execFileSync('/bin/sh', ['-c', `printf '%s' ${shellQuote(evil)}`], { encoding: 'utf8' })
+  assert.equal(back, evil)
+  const n = execFileSync('/bin/sh', ['-c', `set -- ${shellQuote(evil)}; echo $#`], { encoding: 'utf8' })
+  assert.equal(n.trim(), '1')
 })
 
 test('appleScriptQuote 跳脫雙引號與反斜線', () => {
@@ -4086,12 +4109,16 @@ test('buildLaunchScript for terminal 使用 do script', () => {
   assert.match(s, /do script/)
 })
 
-test('buildLaunchScript 對含雙引號的路徑仍產生合法 AppleScript', () => {
-  const s = buildLaunchScript('terminal', '/Users/t/say "hi"', 'echo ok')
-  // AppleScript 字串內的每個雙引號都必須帶前導反斜線
-  const inner = s.slice(s.indexOf('do script'))
-  const unescaped = inner.match(/(?<!\\)"/g) ?? []
-  assert.equal(unescaped.length % 2, 0, 'AppleScript 字串引號未成對')
+// ⚠️ 原稿用正則數引號，數得出成對與否，數不出「AppleScript 認不認」。
+// 實作時改用 osacompile —— 它只編譯不執行，且實測會正確擋下引號不成對
+// （`compilation error: Expected “"” but found end of script.`）。
+test('路徑含雙引號、反斜線與中文時，AppleScript 仍編譯得過', () => {
+  const compiles = (s: string) =>
+    execFileSync('osacompile', ['-o', '/dev/null', '-e', s], { stdio: 'pipe' })
+  for (const cwd of ['/Users/t/say "hi"', '/Users/t/a\\b', '/Users/t/專案 一', "/Users/t/it's"]) {
+    assert.doesNotThrow(() => compiles(buildLaunchScript('terminal', cwd, 'echo ok')))
+    assert.doesNotThrow(() => compiles(buildLaunchScript('iterm', cwd, 'echo ok')))
+  }
 })
 
 test('detectTerminal 在 iTerm 存在時選 iterm', () => {
@@ -4187,7 +4214,18 @@ Expected: PASS，13 個測試全過
 
 - [ ] **Step 5: 實作 run.ts**
 
-沒有獨立測試 —— 它只是把純函式的產出交給 `osascript`，其邏輯已由 Step 1 的測試涵蓋，實際執行則在 Step 8 手動驗收。
+~~沒有獨立測試 —— 它只是把純函式的產出交給 `osascript`，其邏輯已由 Step 1 的測試涵蓋，實際執行則在 Step 8 手動驗收。~~
+
+**實作時修正**：這個判斷讓 `run.ts` 的行覆蓋率只有 78.85%，缺口正是唯一真正產生副作用的地方。而且它可以測，只是不能用「真的開一個終端機跑 claude」去測。實作補了 `src/launch/run.test.ts`：
+
+- `openSession` 交給 osascript 的內容（注入假的 `runOsascript` 即可）
+- 開場訊息只含簡報路徑、不含簡報內容 —— 規格 §9 的核心約束，值得有測試守著
+- 未知 adapter 時拋錯而非開一個亂七八糟的終端機
+- **`runOsascript` 本身**：用 `return 1` 這種不 tell 任何應用程式的腳本跑真的 `osascript`，
+  驗證 execFileSync 這段管線（路徑、逾時、stdio）能動，**不開任何視窗、不花任何錢**；
+  再用一段壞腳本確認它會拋錯，讓 `helm open` 的錯誤處理接得到。
+
+腳本語法的正確性由 Step 1 的 `osacompile` 負責，兩者合起來覆蓋率 100%。
 
 ```ts
 import { execFileSync } from 'node:child_process'
@@ -4390,6 +4428,17 @@ Expected: iTerm 開新分頁、`cd` 到該專案、Claude Code 以該 session re
 
 Run: `node src/cli/main.ts open zzzzzzzz; echo "exit=$?"`
 Expected: 找不到 session 的訊息，`exit=1`。
+
+**驗收結果（2026-08-11）**：
+
+- ✅ 腳本預覽正確：`cd '/Users/you/helm' && claude --resume 'abc-123' '讀 /tmp/b.md 後接續'`，
+  路徑與 id 都被單引號正確包住，整段再被正確跳脫進 AppleScript 字串
+- ✅ `helm open zzzzzzzz` → 「找不到符合 "zzzzzzzz" 的專案或 session」，`exit=1`
+- ⏸️ **真的開一個 iTerm 分頁尚未執行** —— 它會同時開視窗並送出一則付費的
+  `claude --resume` 訊息，屬於要花錢又有外部副作用的動作，留給使用者決定。
+  在此之前，這條路徑的每一段都已分別驗證過：腳本語法由 `osacompile` 驗、
+  `osascript` 管線由 `run.test.ts` 用無害腳本驗、指令組裝與參數跳脫由真的
+  `/bin/sh` 驗、`helm open` 的分支邏輯由 11 個測試驗。
 
 - [ ] **Step 9: 執行完整檢查**
 
