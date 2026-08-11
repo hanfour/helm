@@ -3,23 +3,22 @@ import { join } from 'node:path'
 import type { HelmPaths } from '../../paths.ts'
 import type { DiscoveredSession } from '../../types.ts'
 import { readRegistry } from './registry.ts'
-import { queryProcesses, type ProcessProbe } from './processes.ts'
 
 export const ADAPTER_ID = 'claude-code'
 
 /**
- * Fast path only: reads the registry directory and asks `ps` about the PIDs
- * it found. Must never read a transcript — `helm menu` calls this every
- * five seconds (spec §5.1).
+ * Fast path only: reads the registry directory and locates each session's
+ * transcript by path existence. Must never read a transcript's contents and
+ * must never spawn a subprocess — `helm menu` calls this every five seconds
+ * (spec §5.1).
  *
- * The probe is injectable so tests do not depend on live processes.
+ * Liveness deliberately does NOT belong here. Reconciliation (Task 4) needs
+ * one `ps` result for the whole session set, so `collectStatus` (Task 6)
+ * makes that single call and passes it down. Probing here as well would
+ * spawn `ps` twice per poll for no gain.
  */
-export function discoverClaudeCode(
-  paths: HelmPaths,
-  probe: ProcessProbe = queryProcesses,
-): DiscoveredSession[] {
+export function discoverClaudeCode(paths: HelmPaths): DiscoveredSession[] {
   const { entries } = readRegistry(paths.claudeSessions)
-  const alive = probe(entries.map((e) => e.pid))
 
   return entries
     .map((e): DiscoveredSession => ({
@@ -34,7 +33,6 @@ export function discoverClaudeCode(
       kind: e.kind,
       name: e.name,
       transcriptPath: findTranscript(paths.claudeProjects, e.cwd, e.sessionId),
-      // `alive` is consumed by reconcile (Task 4), not stored here.
     }))
     .toSorted((a, b) => b.updatedAt - a.updatedAt)
 }

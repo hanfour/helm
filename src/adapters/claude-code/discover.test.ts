@@ -35,7 +35,7 @@ const BASE = {
 
 test('探索出註冊表中的 session 並帶上 adapterId', () => {
   const home = scaffold([BASE])
-  const found = discoverClaudeCode(resolvePaths({ home }), () => new Map())
+  const found = discoverClaudeCode(resolvePaths({ home }))
   assert.equal(found.length, 1)
   assert.equal(found[0]?.adapterId, 'claude-code')
   assert.equal(found[0]?.sessionId, 'sess-a')
@@ -45,13 +45,13 @@ test('探索出註冊表中的 session 並帶上 adapterId', () => {
 test('找得到對應的 transcript 路徑', () => {
   const slug = '-Users-testuser-proj'
   const home = scaffold([BASE], [`${slug}/sess-a.jsonl`])
-  const found = discoverClaudeCode(resolvePaths({ home }), () => new Map())
+  const found = discoverClaudeCode(resolvePaths({ home }))
   assert.ok(found[0]?.transcriptPath?.endsWith(`${slug}/sess-a.jsonl`))
 })
 
 test('沒有對應 transcript 時 transcriptPath 為 null', () => {
   const home = scaffold([BASE])
-  const found = discoverClaudeCode(resolvePaths({ home }), () => new Map())
+  const found = discoverClaudeCode(resolvePaths({ home }))
   assert.equal(found[0]?.transcriptPath, null)
 })
 
@@ -60,7 +60,7 @@ test('探索結果依 updatedAt 由新到舊排序', () => {
     { ...BASE, pid: 1, sessionId: 'old', updatedAt: 1000 },
     { ...BASE, pid: 2, sessionId: 'new', updatedAt: 9000 },
   ])
-  const found = discoverClaudeCode(resolvePaths({ home }), () => new Map())
+  const found = discoverClaudeCode(resolvePaths({ home }))
   assert.deepEqual(found.map((f) => f.sessionId), ['new', 'old'])
 })
 
@@ -68,6 +68,6 @@ test('探索不修改傳入的 paths 物件', () => {
   const home = scaffold([BASE])
   const paths = resolvePaths({ home })
   const snapshot = { ...paths }
-  discoverClaudeCode(paths, () => new Map())
+  discoverClaudeCode(paths)
   assert.deepEqual(paths, snapshot)
 })
