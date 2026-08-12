@@ -66,6 +66,21 @@ async function main(argv: readonly string[]): Promise<number> {
 }
 
 /**
+ * A closed pipe is the reader saying "that's enough", not an error.
+ *
+ * `helm status --json | head` and `| jq '.projects[0]'` are the first two
+ * things anyone does with JSON output, and both close the pipe once they have
+ * what they came for. Node's default is an unhandled 'error' event on stdout:
+ * a twelve-line stack trace that reads like helm crashed, printed after a
+ * command that did exactly what it was asked. Everything else still throws.
+ */
+for (const stream of [process.stdout, process.stderr]) {
+  stream.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code !== 'EPIPE') throw err
+  })
+}
+
+/**
  * Every leaf module in helm degrades deliberately, but the writes that must
  * succeed — the brief file, the cache, the prefs file — can still fail on a
  * full disk or a read-only home. Without this the user gets a raw
