@@ -29,6 +29,8 @@ export interface Waiting {
  */
 const BAD_CONCLUSIONS = new Set([
   'FAILURE',
+  // The commit status API's own failure value (StatusContext.state).
+  'ERROR',
   'CANCELLED',
   'TIMED_OUT',
   'ACTION_REQUIRED',

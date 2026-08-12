@@ -85,17 +85,24 @@ function firstLine(path: string): string | null {
  *
  * A rollout's `session_meta` is written when the file is created and never
  * changes, which is what makes an unbounded cache correct here rather than
- * merely convenient. Failures are cached too: a file helm cannot parse would
- * otherwise be re-read every five seconds for ever.
+ * merely convenient.
+ *
+ * **Only successes are cached.** Failures used to be stored too, on the
+ * reasoning that an unparseable file should not be re-read every five
+ * seconds. But Codex creates the file before writing that first line, so a
+ * poll landing in that window saw a torn read — and caching it meant the
+ * session never appeared on the board again, and counted as `invalid` for
+ * ever. Re-reading a genuinely broken file costs one `open` per poll; losing
+ * a session permanently costs the user the thing they came for.
  */
 export interface MetaCache {
-  get: (rolloutId: string) => RolloutMeta | null | undefined
-  set: (rolloutId: string, meta: RolloutMeta | null) => void
+  get: (rolloutId: string) => RolloutMeta | undefined
+  set: (rolloutId: string, meta: RolloutMeta) => void
   flush: () => void
 }
 
 export function loadMetaCache(file: string): MetaCache {
-  const entries = new Map<string, RolloutMeta | null>(Object.entries(readCache(file)))
+  const entries = new Map<string, RolloutMeta>(Object.entries(readCache(file)))
   let dirty = false
 
   return {
@@ -123,11 +130,11 @@ export function resolveMeta(
   const cached = cache.get(file.rolloutId)
   if (cached !== undefined) return cached
   const meta = read(file.path)
-  cache.set(file.rolloutId, meta)
+  if (meta !== null) cache.set(file.rolloutId, meta)
   return meta
 }
 
-function readCache(file: string): Record<string, RolloutMeta | null> {
+function readCache(file: string): Record<string, RolloutMeta> {
   let parsed: unknown
   try {
     parsed = JSON.parse(readFileSync(file, 'utf8'))
@@ -138,14 +145,10 @@ function readCache(file: string): Record<string, RolloutMeta | null> {
   }
   if (!isRecord(parsed)) return {}
 
-  const out: Record<string, RolloutMeta | null> = {}
+  const out: Record<string, RolloutMeta> = {}
   for (const [key, value] of Object.entries(parsed)) {
-    // A cached `null` is a real answer — "this file could not be read" — and
-    // dropping it would send helm back to re-read it on every poll.
-    if (value === null) {
-      out[key] = null
-      continue
-    }
+    // Nulls from an older helm are dropped on read: they are exactly the
+    // permanently-lost sessions this cache used to create.
     if (!isRecord(value)) continue
     const { sessionId, cwd } = value
     if (typeof sessionId === 'string' && typeof cwd === 'string') out[key] = { sessionId, cwd }

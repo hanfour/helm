@@ -99,7 +99,7 @@ test('看板不可信時不清理 —— 刪掉的可能正是那個壞掉的檔
   const old = (Date.now() - 3600_000) / 1000
   utimesSync(stale, old, old)
   const r = captureSync(home, () => runDoctor([], CHECK_DEPS))
-  assert.match(r.out, /✗ 註冊表解析/)
+  assert.match(r.out, /✗ session 記錄解析/)
   assert.ok(!r.out.includes('順手清掉'), '看板不可信時不該動任何 live 檔')
   assert.equal(existsSync(stale), true)
   assert.match(r.out, /先處理上面的問題/)

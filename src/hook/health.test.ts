@@ -104,7 +104,7 @@ test('hook 錯誤紀錄非空時檢查不通過並印出內容', () => {
 })
 
 test('註冊表有解析失敗時如實回報數量 —— table.ts 承諾過這裡查得到原因', () => {
-  const c = find(checksOf(home(), board([], { invalid: 3 })), '註冊表')
+  const c = find(checksOf(home(), board([], { invalid: 3 })), '解析')
   assert.equal(c?.ok, false)
   assert.match(c?.detail ?? '', /3/)
 })
@@ -536,4 +536,30 @@ test('SwiftBar plugin 被別人的檔案佔住時同理', () => {
   const c = find(checksOf(h), 'SwiftBar')
   assert.equal(c?.ok, false, c?.detail)
   assert.match(c?.detail ?? '', /不是 helm/)
+})
+
+test('Codex 的資料來源也要檢查 —— 讀不到時不能說「皆可讀取」', () => {
+  // P4 加了第二個主要資料來源，卻沒加進這個檢查的陣列。
+  // dataSources 的 docstring 正是為這件事寫的：最大的失敗對同名的檢查
+  // 是不可見的。
+  const h = home()
+  const codex = join(h, '.codex', 'sessions')
+  mkdirSync(codex, { recursive: true })
+  chmodSync(codex, 0o000)
+  try {
+    const c = find(checksOf(h), '資料來源')
+    assert.equal(c?.ok, false, c?.detail)
+    assert.match(c?.detail ?? '', /codex/i)
+  } finally {
+    chmodSync(codex, 0o700)
+  }
+})
+
+test('解析失敗的來源要說對 —— Codex 的錯不能算在 ~/.claude 頭上', () => {
+  // registry.ts 把兩個 adapter 的 invalid 加總，但這個檢查寫死了
+  // paths.claudeSessions 與 Claude Code 的成因，於是使用者被指去一個
+  // 完全正常的目錄找一個不在那裡的檔案。
+  const c = find(checksOf(home(), board([], { invalid: 1 })), '解析')
+  assert.equal(c?.ok, false)
+  assert.match(c?.detail ?? '', /codex|來源/i, c?.detail)
 })

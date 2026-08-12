@@ -120,22 +120,49 @@ test('快取檔壞掉時當空的，不讓整個看板掛掉', () => {
   }
 })
 
-test('讀不出來的檔案不會被反覆重讀 —— 否則每 5 秒付一次 25ms', () => {
-  const cache = loadMetaCache(join(tempDir('helm-codex-'), 'cache.json'))
-  const file = { rolloutId: 'r1', path: '/nope', startedAt: 0, mtimeMs: 0 }
-  let reads = 0
-  const reader = () => {
-    reads++
-    return null
-  }
-  assert.equal(resolveMeta(file, cache, reader), null)
-  assert.equal(resolveMeta(file, cache, reader), null)
-  assert.equal(reads, 1, '失敗也要記住')
-})
-
 test('沒有任何新東西時 flush 不寫檔 —— 不必每 5 秒動一次磁碟', () => {
   const path = join(tempDir('helm-codex-'), 'cache.json')
   const cache = loadMetaCache(path)
   cache.flush()
   assert.equal(existsSync(path), false)
+})
+
+test('讀不到的檔案會被重試，不是永久記住 —— 剛建好的 rollout 就長這樣', () => {
+  // Codex 建檔與寫入 session_meta 之間有一個 poll 窗口。原本把 null 寫進
+  // 快取、還特地跨重啟保留它，於是那個 session 永遠不會再出現在看板上，
+  // 而且永遠計入 invalid。readMeta 的註解寫「下次 poll 就讀得到」——
+  // 行為與註解相反。
+  const cache = loadMetaCache(join(tempDir('helm-codex-'), 'cache.json'))
+  const file = { rolloutId: 'r1', path: '/nope', startedAt: 0, mtimeMs: 0 }
+  let reads = 0
+  const failing = () => {
+    reads++
+    return null
+  }
+  assert.equal(resolveMeta(file, cache, failing), null)
+  assert.equal(resolveMeta(file, cache, failing), null)
+  assert.equal(reads, 2, '失敗要重試')
+
+  const good = () => ({ sessionId: SID, cwd: CWD })
+  assert.deepEqual(resolveMeta(file, cache, good), { sessionId: SID, cwd: CWD }, '寫完之後讀得到')
+})
+
+test('成功讀到的仍然只讀一次 —— 那才是快取存在的理由', () => {
+  const cache = loadMetaCache(join(tempDir('helm-codex-'), 'cache.json'))
+  const file = { rolloutId: 'r1', path: '/nope', startedAt: 0, mtimeMs: 0 }
+  resolveMeta(file, cache, () => ({ sessionId: SID, cwd: CWD }))
+  assert.deepEqual(
+    resolveMeta(file, cache, () => { throw new Error('不該讀檔') }),
+    { sessionId: SID, cwd: CWD },
+  )
+})
+
+test('第一行不是 session_meta 就拒絕，即使它帶著 id 與 cwd', () => {
+  // 原本的 fixture 沒有 payload，被下一行的 isRecord 擋掉，
+  // 所以 type 檢查從頭到尾沒有生效過。
+  const body = `${JSON.stringify({
+    type: 'turn_context',
+    payload: { id: SID, cwd: CWD },
+  })}\n`
+  assert.equal(readMeta(rollout(body)), null)
 })

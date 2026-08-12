@@ -124,6 +124,12 @@ function explain(err: unknown): string {
   if (e.code === 'ETIMEDOUT' || /timed out/i.test(stderr)) {
     return 'gh 逾時，PR 狀態這次沒更新。'
   }
+  // The most common failure of all — a laptop off the network — and the only
+  // one that used to fall through to the passthrough, which put a full API
+  // URL into the menu bar.
+  if (/dial tcp|no such host|connection refused|proxyconnect|check your internet/i.test(stderr)) {
+    return '連不上 GitHub，PR 狀態這次沒更新。網路恢復後會自己補上。'
+  }
   // Unrecognised: pass it through rather than inventing a diagnosis. A message
   // helm has never seen is exactly the one the user needs to read verbatim.
   return `gh 失敗了：${firstLine(stderr) || '沒有錯誤訊息'}`
@@ -143,8 +149,29 @@ function toPrRef(item: Record<string, unknown>): PrRef[] {
   }]
 }
 
+/**
+ * `statusCheckRollup` mixes two shapes and they do not share field names.
+ *
+ * `CheckRun` (GitHub Actions) has `status` + `conclusion`. `StatusContext`
+ * (the older commit status API — Buildkite, CircleCI, Jenkins, Prow, CLA
+ * bots, Vercel) has neither: it has `state`. Reading one as the other let
+ * every `StatusContext` fall through to "completed, no conclusion", which
+ * `isUnfinished` treats as passing.
+ *
+ * Measured against kubernetes/kubernetes#141331: 13 checks, all
+ * `StatusContext`, including FAILURE and PENDING — helm said 「等人審」.
+ * A red build was being drawn as a green one.
+ */
 function toCheck(item: unknown): CheckRun[] {
   if (!isRecord(item)) return []
+  if (item['__typename'] === 'StatusContext' || typeof item['state'] === 'string') {
+    const state = typeof item['state'] === 'string' ? item['state'] : null
+    // `PENDING` is the commit status API's "still running"; everything else
+    // is a final verdict and maps onto `conclusion`.
+    return [state === 'PENDING'
+      ? { status: 'PENDING', conclusion: null }
+      : { status: 'COMPLETED', conclusion: state }]
+  }
   const { status, conclusion } = item
   return [{
     status: typeof status === 'string' ? status : 'COMPLETED',

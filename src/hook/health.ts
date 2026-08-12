@@ -72,7 +72,11 @@ export function runChecks(paths: HelmPaths, board: Board, deps: CheckDeps = {}):
  * to the check named after it. This one asks the filesystem directly.
  */
 function dataSources(paths: HelmPaths): Check {
-  const unreadable = [paths.claudeSessions, paths.claudeProjects].filter(
+  // Codex is a primary data source too since P4. Leaving it out reproduced
+  // exactly what this check's docstring warns about: `~/.codex` unreadable,
+  // half the board silently gone, and this check reporting 「皆可讀取」.
+  const codexSessions = join(paths.home, '.codex', 'sessions')
+  const unreadable = [paths.claudeSessions, paths.claudeProjects, codexSessions].filter(
     (d) => existsSync(d) && !canRead(d),
   )
   if (unreadable.length > 0) {
@@ -180,13 +184,22 @@ function liveDir(paths: HelmPaths): Check {
   }
 }
 
+/**
+ * Renamed from 「註冊表解析」and no longer names a single directory.
+ *
+ * `board.invalid` is the sum across adapters (`registry.ts`), so since P4 a
+ * torn Codex rollout would produce 「位於 ~/.claude/sessions」— sending the
+ * user to a perfectly healthy directory to look for a file that was never
+ * there.
+ */
 function registryParse(paths: HelmPaths, board: Board): Check {
   return {
-    name: '註冊表解析',
+    name: 'session 記錄解析',
     ok: board.invalid === 0,
     detail: board.invalid === 0
       ? '全部可解析'
-      : `有 ${board.invalid} 個檔案無法解析，位於 ${paths.claudeSessions}。多半是 Claude Code 改了格式，或檔案被截斷。`,
+      : `有 ${board.invalid} 筆 session 記錄無法解析。來源可能是 ${paths.claudeSessions}`
+        + ` 或 ${join(paths.home, '.codex', 'sessions')} —— 多半是格式改了，或檔案正在寫入中。`,
   }
 }
 
