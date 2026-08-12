@@ -30,23 +30,41 @@ rollout 第一行大小                 8.6–18.6 KB（塞著完整的 base_ins
 lsof -a -d cwd -p <13 pids>        32 ms（對照：ps -eo 是 36 ms）
 ```
 
-**檔名就帶著 session_id 與開始時間**，這是整個快速路徑的關鍵：
+### 修正（2026-08-12，寫完計畫後用全部 192 個檔案驗證時發現）
+
+原本寫的是「檔名就帶著 session_id，所以快速路徑只有 cwd 需要讀檔」。**那是錯的。**
+
+檔名裡的 uuid 是**那個 rollout 檔案自己的 id**，不是 session id：
 
 ```
 rollout-2026-08-03T14-25-24-019fc64c-6b8a-7882-8c7b-c019bd18484c.jsonl
-        └─────── 開始時間 ──────┘ └──────── session_id ────────────┘
+        └─────── 開始時間 ──────┘ └────── 這個檔案的 id ──────────┘
 ```
 
-所以快速路徑**只有 `cwd` 需要讀檔**，而 `cwd` 寫在 `session_meta` 裡、永不改變 → 可以永久快取。首次跑付 25.7 ms，之後只有新 session 需要讀。
+真正的 session id 在第一行的 `payload.session_id ?? payload.id`，而**一個 session 會橫跨多個 rollout 檔**（續接與 fork）：
+
+```
+192 個 rollout 檔  →  依 meta 的 id 分組後只有 86 個 session
+其中 13 個 session 橫跨多個檔案，最多的一個有 33 個
+history.jsonl 的 61 個 id：60 個對得上分組後的 session（一個是舊格式）
+session_meta 的 payload 有 14 種形狀（2026-04 到 2026-08 的版本演進），
+  但 cwd 在 192/192 都存在且都是絕對路徑
+```
+
+照檔案畫的話，那個 33 個檔的專案會在看板上變成 33 行同一個 session。
+
+**所以第一行非讀不可**，session id 與 cwd 都在裡面。快取仍然救得回效能——rollout 檔一旦寫好，它的 `id` 與 `cwd` 就不再改變，快取 key 用檔名（唯一），value 存 `{sessionId, cwd}`：首次付 25.7 ms，之後只有新檔案要讀。
+
+`rollout-name.ts` 仍然有用：它解出的是**快取的 key 與這個檔案的起始時間**，不是 session id。這個角色差異要寫進它的型別名稱裡，否則下一個人會再踩一次。
 
 ## File Structure
 
 | 檔案 | 責任 |
 |---|---|
 | `src/adapters/codex/paths.ts` | `~/.codex` 底下的位置，與 `HelmPaths` 對稱 |
-| `src/adapters/codex/rollout-name.ts` | 檔名 ↔ `{sessionId, startedAt}`，純函式 |
+| `src/adapters/codex/rollout-name.ts` | 檔名 → `{rolloutId, startedAt}`，純函式（不是 session id） |
 | `src/adapters/codex/scan.ts` | 遞迴掃 `sessions/YYYY/MM/DD/`，只 stat 不讀內容 |
-| `src/adapters/codex/meta.ts` | 讀 `session_meta` 第一行取 `cwd`；帶持久快取 |
+| `src/adapters/codex/meta.ts` | 讀 `session_meta` 第一行取 session id 與 `cwd`；帶持久快取 |
 | `src/adapters/codex/processes.ts` | `pgrep codex` + `lsof -d cwd`，回 cwd → pid |
 | `src/adapters/codex/discover.ts` | 組裝成 `DiscoveredSession[]` |
 | `src/adapters/codex/history.ts` | 慢速路徑：從 `history.jsonl` 取該 session 的 prompt |
@@ -54,11 +72,13 @@ rollout-2026-08-03T14-25-24-019fc64c-6b8a-7882-8c7b-c019bd18484c.jsonl
 
 ---
 
-### Task 1：從 rollout 檔名解析 session id 與開始時間
+### Task 1：從 rollout 檔名解析檔案 id 與開始時間
 
 **Files:** Create `src/adapters/codex/rollout-name.ts`、`rollout-name.test.ts`
 
-**Interfaces:** Produces `parseRolloutName(name: string): { sessionId: string; startedAt: number } | null`
+**Interfaces:** Produces `parseRolloutName(name: string): { rolloutId: string; startedAt: number } | null`
+
+**注意：** 回傳的是 `rolloutId`（這個檔案自己的 id），**不是 session id**。session id 只存在第一行的 payload 裡，見上面的修正。
 
 - [ ] **Step 1：寫失敗測試**——正常檔名、非 rollout 檔名、時間戳格式壞掉、uuid 少一段、目錄分隔符混進來。時間是本地時間還是 UTC 要對照 `session_meta.timestamp` 確認（實測那一筆檔名 `T14-25-24` 對應 payload 的 `06:25:24.937Z`，差 8 小時 → **檔名是本地時間**，這件事必須有測試釘住，否則排序會錯 8 小時）
 - [ ] **Step 2：跑測試確認紅**
@@ -70,7 +90,7 @@ rollout-2026-08-03T14-25-24-019fc64c-6b8a-7882-8c7b-c019bd18484c.jsonl
 
 **Files:** Create `src/adapters/codex/scan.ts`、`scan.test.ts`
 
-**Interfaces:** Consumes Task 1。Produces `scanRollouts(sessionsDir, sinceMs): RolloutFile[]`，欄位 `{ sessionId, path, startedAt, mtimeMs }`
+**Interfaces:** Consumes Task 1。Produces `scanRollouts(sessionsDir, sinceMs): RolloutFile[]`，欄位 `{ rolloutId, path, startedAt, mtimeMs }`
 
 - [ ] **Step 1：寫失敗測試**——`YYYY/MM/DD` 三層結構、窗口過濾用 mtime 不是檔名時間（session 可能開很久）、目錄不存在回空陣列不丟例外、非 rollout 檔案略過、檔名解析失敗的檔案略過而不是讓整批失敗
 - [ ] **Step 2：紅**
@@ -83,7 +103,9 @@ rollout-2026-08-03T14-25-24-019fc64c-6b8a-7882-8c7b-c019bd18484c.jsonl
 
 **Files:** Create `src/adapters/codex/meta.ts`、`meta.test.ts`
 
-**Interfaces:** Produces `readCwd(path): string | null`、`CwdCache` 介面 `{ get(sessionId), set(sessionId, cwd), flush() }`
+**Interfaces:** Produces `readMeta(path): { sessionId: string; cwd: string } | null`、`MetaCache` 介面 `{ get(rolloutId), set(rolloutId, meta), flush() }`
+
+**多形狀容忍：** `payload` 有 14 種變體。只取 `session_id ?? id` 與 `cwd`，其餘一律忽略——任何對其他欄位的依賴都會在下一次 Codex 改版時斷掉。
 
 - [ ] **Step 1：寫失敗測試**——第一行不是 JSON、`type` 不是 `session_meta`、`payload.cwd` 缺、cwd 不是絕對路徑（一律拒絕，同 `scan-dir.ts` 的理由）、18 KB 的第一行讀得完、快取命中時不碰檔案（用一個會丟例外的 reader 證明）
 - [ ] **Step 2：紅**
@@ -127,7 +149,7 @@ rollout-2026-08-03T14-25-24-019fc64c-6b8a-7882-8c7b-c019bd18484c.jsonl
 
 **Interfaces:** Consumes Tasks 1–4。Produces `discoverCodex(paths, opts, deps?): { sessions: DiscoveredSession[]; invalid: number }`
 
-- [ ] **Step 1：寫失敗測試**——`adapterId` 是 `'codex'`、`nativeStatus` 是 `null`（Codex 沒有 hook，沒有 busy/idle 之分——這一點不得偽造）、`transcriptPath` 指向 rollout、cwd 讀不到的 session 計入 `invalid` 而不是靜默消失、`alwaysInclude`（釘選）的專案不受窗口約束
+- [ ] **Step 1：寫失敗測試**——**多個 rollout 檔要合併成一個 session**（依 `sessionId` 分組，`updatedAt` 取最大的 mtime、`startedAt` 取最小的、`transcriptPath` 指向最新的那個檔）、`adapterId` 是 `'codex'`、`nativeStatus` 是 `null`（Codex 沒有 hook，沒有 busy/idle 之分——這一點不得偽造）、cwd 讀不到的 session 計入 `invalid` 而不是靜默消失、`alwaysInclude`（釘選）的專案不受窗口約束
 - [ ] **Step 2：紅**
 - [ ] **Step 3：實作**
 - [ ] **Step 4：綠**
