@@ -20,14 +20,22 @@ export function recorderPath(): string {
  * .mjs rather than .ts because type stripping costs ~21 ms every single time
  * (71.6 ms against 50.7 ms). Both matter here and nowhere else in helm: this
  * command runs before every tool call the user makes.
+ *
+ * The interpreter is an absolute path, not `node`. A hook inherits whatever
+ * environment its host was launched with, and an app started from Finder or a
+ * login item gets launchd's bare PATH — where a version manager's shim
+ * (nvm, volta, fnm, all of which live under the home directory) does not
+ * exist. Relying on PATH means the hook silently stops working the first time
+ * the machine is rebooted.
  */
 export function buildHookCommand(
   liveDir: string,
   errorsLog: string,
   recorder: string = recorderPath(),
+  nodeBin: string = process.execPath,
 ): string {
   return [
-    `exec node --no-warnings ${shellQuote(recorder)}`,
+    `exec ${shellQuote(nodeBin)} --no-warnings ${shellQuote(recorder)}`,
     shellQuote(liveDir),
     shellQuote(errorsLog),
     `# ${HOOK_MARKER}`,

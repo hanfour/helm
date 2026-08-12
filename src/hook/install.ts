@@ -23,6 +23,8 @@ const SCRIPT_MARKER = `# ${HOOK_MARKER}`
 export interface InstallDeps {
   now: () => number
   repoRoot: string
+  /** Absolute interpreter path; see `nodeInvocation`. */
+  nodeBin?: string
   /** Injected so the SwiftBar branches are testable on any machine. */
   swiftbarInstalled?: boolean
   swiftbar?: SwiftBarDeps
@@ -114,8 +116,9 @@ function apply(
   steps.push(`已把 hook 加進 ${paths.claudeSettings}（其餘設定未動）`)
 
   const entry = shellQuote(join(deps.repoRoot, 'src/cli/main.ts'))
+  const nodeBin = deps.nodeBin ?? process.execPath
   const wrapper = wrapperPath(paths)
-  const wrapperOk = writeOurScript(wrapper, `#!/bin/sh\nexec node ${entry} "$@"\n`)
+  const wrapperOk = writeOurScript(wrapper, `#!/bin/sh\n${nodeInvocation(nodeBin)}\nexec "$NODE" ${entry} "$@"\n`)
   if (wrapperOk) steps.push(`已安裝 ${wrapper}`)
   else warnings.push(`${wrapper} 已經存在且不是 helm 寫的（Kubernetes 的 helm 也叫這個名字），未覆寫。想用 helm 指令請自行改名或換一個位置。`)
 
@@ -129,8 +132,10 @@ function apply(
     // Absolute path: SwiftBar runs plugins with a minimal PATH that will not
     // contain ~/.local/bin. Falls back to the entry point directly when the
     // wrapper is somebody else's file.
-    const invoke = wrapperOk ? `${shellQuote(wrapper)} menu` : `node ${entry} menu`
-    if (writeOurScript(plugin, `#!/bin/sh\nexec ${invoke}\n`)) {
+    const body = wrapperOk
+      ? `#!/bin/sh\nexec ${shellQuote(wrapper)} menu\n`
+      : `#!/bin/sh\n${nodeInvocation(nodeBin)}\nexec "$NODE" ${entry} menu\n`
+    if (writeOurScript(plugin, body)) {
       steps.push(`已安裝 SwiftBar plugin：${plugin}`)
     } else {
       warnings.push(`${plugin} 已經存在且不是 helm 寫的，未覆寫。`)
@@ -201,6 +206,23 @@ function onPath(dir: string): boolean {
     .split(':')
     .filter((p) => p !== '')
     .some((p) => resolve(p) === target)
+}
+
+/**
+ * Pins the interpreter by absolute path, with PATH as a fallback.
+ *
+ * SwiftBar, and anything else launched from Finder or a login item, inherits
+ * launchd's bare PATH — `/usr/bin:/bin:/usr/sbin:/sbin`. Every Node version
+ * manager (volta, nvm, fnm) installs its shim under the home directory, so a
+ * bare `node` is simply not found there and the menu bar goes blank after the
+ * next reboot with nothing to explain why.
+ *
+ * The fallback matters too: an absolute path breaks when the version manager
+ * upgrades Node and removes the old image. `helm doctor` checks the pinned
+ * path still exists so that failure is reported rather than discovered.
+ */
+function nodeInvocation(nodeBin: string): string {
+  return `NODE=${shellQuote(nodeBin)}\n[ -x "$NODE" ] || NODE=node`
 }
 
 /** Returns false when something helm did not write already occupies the path. */

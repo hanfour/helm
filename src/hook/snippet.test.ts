@@ -224,7 +224,7 @@ test('buildHookCommand 產出單行、帶識別字、且路徑經過跳脫', () 
   const cmd = buildHookCommand('/h/live', '/h/errors.log')
   assert.ok(!cmd.includes('\n'), 'settings.json 裡的指令必須是單行')
   assert.ok(cmd.includes(HOOK_MARKER))
-  assert.match(cmd, /^exec node --no-warnings /)
+  assert.match(cmd, /^exec '[^']+' --no-warnings /)
   assert.ok(cmd.includes(recorderPath()))
 })
 

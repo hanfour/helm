@@ -4,8 +4,10 @@ import {
   chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync,
   statSync, symlinkSync, writeFileSync,
 } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { resolvePaths } from '../paths.ts'
 import { installHook, uninstallHook } from './install.ts'
 import { hasHelmHook } from './settings.ts'
@@ -26,6 +28,8 @@ const fakeSwiftBar = (initial: Record<string, string> = {}) => {
 
 // Stateless by default: a shared mutable store would let the first test that
 // installs leak its PluginDirectory into every test after it.
+const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url))
+
 const DEPS = {
   now: () => 1786000000000,
   repoRoot: '/repo',
@@ -71,7 +75,7 @@ test('安裝會寫出可執行的 helm wrapper', () => {
   const h = home({})
   installHook(resolvePaths({ home: h }), DEPS)
   const wrapper = join(h, '.local', 'bin', 'helm')
-  assert.match(readFileSync(wrapper, 'utf8'), /exec node '\/repo\/src\/cli\/main\.ts' "\$@"/)
+  assert.match(readFileSync(wrapper, 'utf8'), /exec "\$NODE" '\/repo\/src\/cli\/main\.ts' "\$@"/)
   assert.ok((statSync(wrapper).mode & 0o111) !== 0, 'wrapper 必須可執行')
 })
 
@@ -355,4 +359,30 @@ test('uninstall 前也會備份 —— 那才是真正在刪東西的那一邊',
   const backups = readdirSync(join(h, '.helm', 'backups'))
   assert.equal(backups.length, 2, '安裝前一份、解除安裝前一份')
   assert.ok(backups.some((n) => n.includes('uninstall')))
+})
+
+test('wrapper 用絕對路徑的 node，不依賴 PATH', () => {
+  // SwiftBar 等由 Finder／登入項目啟動的 app 拿到的是 launchd 的精簡 PATH，
+  // 而所有 Node 版本管理器的 shim 都在家目錄底下 —— 重開機後就找不到。
+  const h = home({})
+  installHook(resolvePaths({ home: h }), { ...DEPS, nodeBin: '/abs/node' })
+  const body = readFileSync(join(h, '.local', 'bin', 'helm'), 'utf8')
+  assert.match(body, /NODE='\/abs\/node'/)
+  assert.match(body, /exec "\$NODE"/)
+})
+
+test('絕對路徑不存在時退回 PATH —— 版本管理器升級會刪掉舊的 image', () => {
+  const h = home({})
+  installHook(resolvePaths({ home: h }), { ...DEPS, nodeBin: '/abs/node' })
+  assert.match(readFileSync(join(h, '.local', 'bin', 'helm'), 'utf8'), /\[ -x "\$NODE" \] \|\| NODE=node/)
+})
+
+test('在精簡 PATH 下 wrapper 仍然跑得起來', () => {
+  const h = home({})
+  installHook(resolvePaths({ home: h }), { ...DEPS, nodeBin: process.execPath, repoRoot: REPO_ROOT })
+  const out = execFileSync(join(h, '.local', 'bin', 'helm'), ['help'], {
+    encoding: 'utf8',
+    env: { HOME: h, PATH: '/usr/bin:/bin:/usr/sbin:/sbin' },
+  })
+  assert.match(out, /helm —/)
 })

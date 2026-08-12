@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { addHelmHook, hasHelmHook, removeHelmHook } from './settings.ts'
 import { HOOK_MARKER } from './snippet.ts'
 
-const CMD = `exec node --no-warnings '/repo/src/hook/record.mjs' '/h/live' '/h/e.log' # ${HOOK_MARKER}`
+const CMD = `exec '/abs/node' --no-warnings '/repo/src/hook/record.mjs' '/h/live' '/h/e.log' # ${HOOK_MARKER}`
 
 /** The shape the user's file actually has today: no hooks key at all. */
 const REAL = {
@@ -129,7 +129,7 @@ test('形狀像但不是 helm 寫的（沒有 marker）也不會被刪', () => {
     hooks: {
       PreToolUse: [{
         matcher: '*',
-        hooks: [{ type: 'command', command: 'exec node --no-warnings /somewhere/else.mjs' }],
+        hooks: [{ type: 'command', command: 'exec /abs/node --no-warnings /somewhere/else.mjs' }],
       }],
     },
   }

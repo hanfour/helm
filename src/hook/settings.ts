@@ -15,8 +15,13 @@ const HookGroup = z.object({
  */
 const PreToolUseSchema = z.array(HookGroup)
 
-/** Exactly what `buildHookCommand` emits, so nothing else can be mistaken for it. */
-const COMMAND_PREFIX = 'exec node --no-warnings '
+/**
+ * Structural fingerprints of what `buildHookCommand` emits. The interpreter is
+ * now an absolute path that varies per machine and changes on a Node upgrade,
+ * so it cannot be part of the match — but `record.mjs` and the marker together
+ * are specific enough that nothing else is mistaken for helm's own entry.
+ */
+const COMMAND_SIGNS = ['exec ', '--no-warnings ', 'record.mjs'] as const
 
 type Settings = Record<string, unknown>
 
@@ -110,7 +115,10 @@ function isHelmGroup(group: unknown): boolean {
   if (!Array.isArray(hooks) || hooks.length !== 1) return false
   const entry = hooks[0]
   if (!isRecord(entry) || typeof entry['command'] !== 'string') return false
-  return entry['command'].startsWith(COMMAND_PREFIX) && entry['command'].includes(HOOK_MARKER)
+  const command = entry['command']
+  return command.startsWith(COMMAND_SIGNS[0])
+    && COMMAND_SIGNS.every((sign) => command.includes(sign))
+    && command.includes(HOOK_MARKER)
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
