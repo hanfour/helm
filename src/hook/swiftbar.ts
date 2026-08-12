@@ -45,3 +45,8 @@ export function resolvePluginDir(paths: HelmPaths, deps: SwiftBarDeps): ScannedD
 export function adoptPluginDir(dir: string, deps: SwiftBarDeps): void {
   deps.writePref(PLUGIN_DIR_KEY, dir)
 }
+
+/** Undoes helm's own adopt. Never called on a folder the user chose. */
+export function releasePluginDir(deps: PrefsIO): void {
+  deps.clearPref(PLUGIN_DIR_KEY)
+}

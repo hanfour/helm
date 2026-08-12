@@ -33,8 +33,8 @@ export const WIDGET_NAME = 'helm.jsx'
 export function buildWidget(argv: readonly string[]): string {
   const command = JSON.stringify(argv.map(shellQuote).join(' '))
   return `// ${WIDGET_MARKER} —— 這個檔案由 helm install 產生。
-// 想改就改：helm install 會偵測到你動過它，改為保留並提醒你。
-// helm uninstall 只刪掉未經修改的版本。
+// 想改就改：檔尾有一行內容雜湊，helm install 會據此發現你動過它，
+// 改為保留你的版本並提醒你。helm uninstall 也只刪掉未經修改的版本。
 
 export const command = ${command}
 

@@ -39,3 +39,8 @@ export function resolveWidgetDir(paths: HelmPaths, deps: UbersichtDeps): Scanned
 export function adoptWidgetDir(dir: string, deps: UbersichtDeps): void {
   deps.writePref(WIDGET_DIR_KEY, dir)
 }
+
+/** Undoes helm's own adopt. Never called on a folder the user chose. */
+export function releaseWidgetDir(deps: PrefsIO): void {
+  deps.clearPref(WIDGET_DIR_KEY)
+}

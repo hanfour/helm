@@ -12,6 +12,7 @@ import type { PrefRead, PrefsIO } from './defaults.ts'
 export const NO_PREFS: PrefsIO = {
   readPref: () => ({ kind: 'unset' }),
   writePref: () => {},
+  clearPref: () => {},
 }
 
 export interface FakePrefs extends PrefsIO {
@@ -27,6 +28,9 @@ export function fakePrefs(seed: Record<string, string> = {}): FakePrefs {
     writePref: (key, value) => {
       store[key] = value
     },
+    clearPref: (key) => {
+      delete store[key]
+    },
   }
 }
 
@@ -37,6 +41,9 @@ export function unreadablePrefs(reason = 'ENOBUFS'): FakePrefs {
     readPref: () => ({ kind: 'unreadable', reason }),
     writePref: () => {
       throw new Error('讀不到設定時不該寫入')
+    },
+    clearPref: () => {
+      throw new Error('讀不到設定時不該刪除')
     },
   }
 }

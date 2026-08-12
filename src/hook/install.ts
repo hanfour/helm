@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import {
   chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync,
   statSync, writeFileSync,
@@ -7,11 +8,12 @@ import type { HelmPaths } from '../paths.ts'
 import { addHelmHook, hasHelmHook, removeHelmHook } from './settings.ts'
 import { buildHookCommand, HOOK_MARKER, shellQuote } from './snippet.ts'
 import {
-  adoptPluginDir, defaultPluginDir, defaultSwiftBarDeps, PLUGIN_NAME, resolvePluginDir,
-  type SwiftBarDeps,
+  adoptPluginDir, defaultPluginDir, defaultSwiftBarDeps, PLUGIN_NAME, releasePluginDir,
+  resolvePluginDir, type SwiftBarDeps,
 } from './swiftbar.ts'
 import {
-  adoptWidgetDir, defaultUbersichtDeps, defaultWidgetDir, resolveWidgetDir, type UbersichtDeps,
+  adoptWidgetDir, defaultUbersichtDeps, defaultWidgetDir, releaseWidgetDir, resolveWidgetDir,
+  type UbersichtDeps,
 } from './ubersicht.ts'
 import type { ScannedDir } from './scan-dir.ts'
 import { buildWidget, WIDGET_MARKER, WIDGET_NAME } from './widget.ts'
@@ -29,6 +31,44 @@ const SCRIPT_MARKER = `# ${HOOK_MARKER}`
 
 /** The same marker as a JS comment: an Übersicht widget is an ES module. */
 const WIDGET_COMMENT = `// ${WIDGET_MARKER}`
+
+/**
+ * Stamped into every generated file so helm can tell "I wrote this and it is
+ * untouched" from "I wrote this and the user has since edited it".
+ *
+ * The marker alone cannot: it sits on line one, nobody deletes it, and the
+ * widget's own header invites the user to edit the file. So every edit was
+ * being overwritten on the next install — silently, and reported as a
+ * successful install.
+ */
+const HASH_LABEL = 'helm-content'
+
+function stamped(body: string, comment: string): string {
+  const digest = createHash('sha256').update(body).digest('hex').slice(0, 16)
+  return `${body}${comment} ${HASH_LABEL}:${digest}\n`
+}
+
+/**
+ * True when the file is byte-for-byte what helm last wrote.
+ *
+ * A file with no stamp at all was written by a helm from before this existed,
+ * so it belongs to helm and may be replaced. That does mean a user who edits
+ * the file *and* deletes the stamp line loses their changes — but the stamp
+ * sits at the very bottom under its own comment, and someone editing colours
+ * or a position has no reason to remove it.
+ */
+function isUnmodified(path: string): boolean {
+  let body: string
+  try {
+    body = readFileSync(path, 'utf8')
+  } catch {
+    return false
+  }
+  const match = new RegExp(`^(?:#|//) ${HASH_LABEL}:([0-9a-f]{16})\\n$`, 'm').exec(body)
+  if (match?.[1] === undefined) return true
+  const original = body.slice(0, body.length - match[0].length)
+  return createHash('sha256').update(original).digest('hex').slice(0, 16) === match[1]
+}
 
 export interface InstallDeps {
   now: () => number
@@ -226,14 +266,22 @@ function installWidget(
     : [invocation.nodeBin, invocation.entryRaw, 'status', '--json']
   // 0644, not 0755: a widget is a module Übersicht imports, not a program it
   // runs, and an executable bit here would only be noise.
-  if (writeOurFile(widget, `${buildWidget(argv)}`, 0o644)) {
+  if (writeOurFile(widget, stamped(buildWidget(argv), '//'), 0o644)) {
     steps.push(`已安裝桌面 widget：${widget}`)
   } else {
     warnings.push(refusal(widget))
   }
+  warnings.push(
+    '桌面 widget 要能用滑鼠拖曳，需要在 Übersicht 偏好裡開啟 Enable interaction。'
+    + '開了之後 widget 那塊區域會擋住底下桌面圖示的點擊 —— 這是它的代價，由你決定。',
+  )
   if (scan.adoptable) {
     adoptWidgetDir(scan.dir, ubersicht)
     steps.push(`已把 Übersicht 的 widget 資料夾設為 ${scan.dir}`)
+    // Übersicht fixes the folder as an argv at launch, so a running instance
+    // is still scanning the old one. helm warns about the hook needing a new
+    // session; this deserves the same.
+    warnings.push('Übersicht 啟動時就把 widget 資料夾固定住了，請重新啟動它才會看到桌面看板。')
   }
 }
 
@@ -272,8 +320,26 @@ export function uninstallHook(paths: HelmPaths, deps: InstallDeps): InstallRepor
     join(widgetDir.dir ?? defaultWidgetDir(paths), WIDGET_NAME),
   ]) {
     if (!isOurScript(path)) continue
+    // Written by helm, then edited by the user. Deleting it would throw away
+    // work helm's own file header invited them to do.
+    if (!isUnmodified(path)) {
+      warnings.push(`${path} 你改過了，保留未刪。不需要的話請自行刪除。`)
+      continue
+    }
     rmSync(path, { force: true })
     steps.push(`已移除 ${path}`)
+  }
+
+  // `adoptable` means the app has no setting at all, so there is nothing to
+  // hand back. A setting whose value is helm's own default is one helm wrote;
+  // anything else was the user's choice and stays exactly as it is.
+  if (!pluginDir.adoptable && pluginDir.dir === defaultPluginDir(paths)) {
+    releasePluginDir(swiftbar)
+    steps.push('已還原 SwiftBar 的 plugin 資料夾設定（那是 helm 安裝時設的）')
+  }
+  if (!widgetDir.adoptable && widgetDir.dir === defaultWidgetDir(paths)) {
+    releaseWidgetDir(ubersicht)
+    steps.push('已還原 Übersicht 的 widget 資料夾設定（那是 helm 安裝時設的）')
   }
 
   // live/ and cache.json stay. They are the user's own history, and deleting
@@ -315,7 +381,7 @@ function nodeInvocation(nodeBin: string): string {
 
 /** Returns false when something helm did not write already occupies the path. */
 function writeOurScript(path: string, body: string): boolean {
-  return writeOurFile(path, `${body}${SCRIPT_MARKER}\n`, 0o755)
+  return writeOurFile(path, stamped(`${body}${SCRIPT_MARKER}\n`, '#'), 0o755)
 }
 
 function writeOurFile(path: string, body: string, mode: number): boolean {
@@ -325,6 +391,8 @@ function writeOurFile(path: string, body: string, mode: number): boolean {
   // removing only the link and orphaning the file it had created.
   if (isSymlink(path)) return false
   if (existsSync(path) && !isOurScript(path)) return false
+  // Written by helm, then edited by the user. Their version stays.
+  if (existsSync(path) && !isUnmodified(path)) return false
   mkdirSync(dirname(path), { recursive: true })
   writeFileSync(path, body, 'utf8')
   chmodSync(path, mode)
@@ -338,11 +406,14 @@ function writeOurFile(path: string, body: string, mode: number): boolean {
  * just the bare word — is what keeps a third-party file that merely mentions
  * helm from being deleted by uninstall.
  */
-/** Says which of the two reasons applied, because they need different fixes. */
+/** Says which of the three reasons applied, because they need different fixes. */
 function refusal(path: string): string {
-  return isSymlink(path)
-    ? refusedSymlink(path)
-    : `${path} 已經存在且不是 helm 寫的，未覆寫。`
+  if (isSymlink(path)) return refusedSymlink(path)
+  if (isOurScript(path)) {
+    return `${path} 你改過了，helm 保留你的版本沒有覆寫。`
+      + '想換回 helm 產生的版本，把它刪掉再跑一次 helm install。'
+  }
+  return `${path} 已經存在且不是 helm 寫的，未覆寫。`
 }
 
 function refusedSymlink(path: string): string {

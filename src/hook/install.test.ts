@@ -632,3 +632,100 @@ test('新建的 settings.json 用兩空白縮排', () => {
   const body = readFileSync(join(h, '.claude', 'settings.json'), 'utf8')
   assert.match(body, /\n {2}"hooks"/, body.slice(0, 120))
 })
+
+test('使用者改過 widget 之後，install 保留它並說出來', () => {
+  // The file's own second line invites the user to edit it and promises
+  // install will not overwrite. `isOurScript` only looked for the marker,
+  // which is on line one and nobody deletes — so every edit was silently
+  // destroyed, and reported as 「✓ 已安裝桌面 widget」.
+  const h = home({})
+  const paths = resolvePaths({ home: h })
+  const deps = { ...DEPS, ubersichtInstalled: true, ubersicht: fakePrefs() }
+  installHook(paths, deps)
+  const widget = join(h, 'Library', 'Application Support', 'Übersicht', 'widgets', 'helm.jsx')
+  const edited = `${readFileSync(widget, 'utf8')}\n// MY EDIT\n`
+  writeFileSync(widget, edited)
+
+  const report = installHook(paths, deps)
+  assert.equal(readFileSync(widget, 'utf8'), edited, '改過的內容不該消失')
+  assert.ok(
+    report.warnings.some((w) => w.includes('helm.jsx') && w.includes('改')),
+    report.warnings.join('\n'),
+  )
+  assert.ok(!report.steps.some((s) => s.includes('已安裝桌面 widget')), report.steps.join('\n'))
+})
+
+test('沒改過的 widget 照樣更新 —— 那是修好路徑的方式', () => {
+  const h = home({})
+  const paths = resolvePaths({ home: h })
+  const deps = { ...DEPS, ubersichtInstalled: true, ubersicht: fakePrefs() }
+  installHook(paths, deps)
+  const report = installHook(paths, { ...deps, repoRoot: '/moved' })
+  assert.ok(report.steps.some((s) => s.includes('已安裝桌面 widget')), report.warnings.join('\n'))
+})
+
+test('uninstall 保留使用者改過的 widget，並告訴他檔案還在', () => {
+  const h = home({})
+  const paths = resolvePaths({ home: h })
+  const deps = { ...DEPS, ubersichtInstalled: true, ubersicht: fakePrefs() }
+  installHook(paths, deps)
+  const widget = join(h, 'Library', 'Application Support', 'Übersicht', 'widgets', 'helm.jsx')
+  writeFileSync(widget, `${readFileSync(widget, 'utf8')}\n// MY EDIT\n`)
+
+  const report = uninstallHook(paths, deps)
+  assert.equal(existsSync(widget), true, '改過的檔案不該被刪')
+  assert.ok(report.warnings.some((w) => w.includes(widget)), report.warnings.join('\n'))
+})
+
+test('uninstall 把 helm 自己設定的資料夾偏好還原回未設定', () => {
+  // install listed 「已把 Übersicht 的 widget 資料夾設為 …」as a step; uninstall
+  // said nothing and left it. SwiftBar then points forever at a folder helm
+  // created, never asks again on first launch, and shows an empty menu bar
+  // with nothing linking it back to helm.
+  const h = home({})
+  const paths = resolvePaths({ home: h })
+  const sb = fakePrefs()
+  const ub = fakePrefs()
+  const deps = { ...DEPS, ubersichtInstalled: true, swiftbar: sb, ubersicht: ub }
+  installHook(paths, deps)
+  assert.ok(sb.store['PluginDirectory'], '前提：install 有設定它')
+
+  const report = uninstallHook(paths, deps)
+  assert.equal(sb.store['PluginDirectory'], undefined, 'helm 設的就該由 helm 收回')
+  assert.equal(ub.store['widgetDir'], undefined)
+  assert.ok(report.steps.some((s) => s.includes('資料夾')), report.steps.join('\n'))
+})
+
+test('使用者自己選過的資料夾，uninstall 不動它', () => {
+  const h = home({})
+  const paths = resolvePaths({ home: h })
+  const sb = fakePrefs({ PluginDirectory: join(h, 'my-plugins') })
+  const deps = { ...DEPS, swiftbar: sb }
+  installHook(paths, deps)
+  uninstallHook(paths, deps)
+  assert.equal(sb.store['PluginDirectory'], join(h, 'my-plugins'), '那是使用者的決定')
+})
+
+test('設定完 widget 資料夾要提醒重啟 Übersicht —— 它啟動時就把資料夾固定了', () => {
+  const h = home({})
+  const report = installHook(resolvePaths({ home: h }), {
+    ...DEPS, ubersichtInstalled: true, ubersicht: fakePrefs(),
+  })
+  assert.ok(
+    report.warnings.some((w) => w.includes('Übersicht') && w.includes('重')),
+    report.warnings.join('\n'),
+  )
+})
+
+test('裝了 widget 就要提到拖曳需要 Enable interaction', () => {
+  // The drag code is inert unless that global preference is on, and the card
+  // looks exactly like something you can drag either way.
+  const h = home({})
+  const report = installHook(resolvePaths({ home: h }), {
+    ...DEPS, ubersichtInstalled: true, ubersicht: fakePrefs(),
+  })
+  assert.ok(
+    report.warnings.some((w) => w.includes('interaction')),
+    report.warnings.join('\n'),
+  )
+})

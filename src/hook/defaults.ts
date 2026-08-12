@@ -16,6 +16,8 @@ export type PrefRead =
 export interface PrefsIO {
   readPref: (key: string) => PrefRead
   writePref: (key: string, value: string) => void
+  /** Back to "never configured" — only ever used to undo helm's own write. */
+  clearPref: (key: string) => void
 }
 
 export function prefsFor(bundleId: string): PrefsIO {
@@ -27,6 +29,10 @@ export function prefsFor(bundleId: string): PrefsIO {
     writePref: (key, value) => {
       guard(bundleId, `write ${key}=${value}`)
       writePref(bundleId, key, value)
+    },
+    clearPref: (key) => {
+      guard(bundleId, `delete ${key}`)
+      clearPref(bundleId, key)
     },
   }
 }
@@ -146,6 +152,14 @@ function unescapeXml(s: string): string {
     .split('&quot;').join('"')
     .split('&apos;').join("'")
     .split('&amp;').join('&')
+}
+
+function clearPref(bundleId: string, key: string): void {
+  try {
+    execFileSync('defaults', ['delete', bundleId, key], { stdio: ['ignore', 'ignore', 'ignore'] })
+  } catch {
+    // Already absent, which is the state we were asking for.
+  }
 }
 
 /** `-string` is not optional: without it `defaults` stores "2" as an integer. */

@@ -87,7 +87,9 @@ export function currentPrefs(): { swiftbar: PrefsIO; ubersicht: PrefsIO } {
   if (process.env['HELM_FAKE_HOME'] === undefined) {
     return { swiftbar: defaultSwiftBarDeps(), ubersicht: defaultUbersichtDeps() }
   }
-  const sandboxed: PrefsIO = { readPref: () => ({ kind: 'unset' }), writePref: () => {} }
+  const sandboxed: PrefsIO = {
+    readPref: () => ({ kind: 'unset' }), writePref: () => {}, clearPref: () => {},
+  }
   return { swiftbar: sandboxed, ubersicht: sandboxed }
 }
 
