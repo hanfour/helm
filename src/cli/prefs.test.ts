@@ -122,3 +122,32 @@ test('偏好檔毀損時先警告再寫，不讓使用者以為設定一直都�
   assert.match(r.err, /毀損|無法解析/)
   assert.equal(readPrefsOf(home).projects[join(home, 'proj')]?.pinned, true)
 })
+
+test('隱藏兩個名字有前綴關係的專案後，短的那個仍 show 得回來', () => {
+  // proj 的每一個子字串都同時是 proj2 的子字串，連完整路徑也一樣 ——
+  // 「打長一點」在數學上不可能照做。show 是 hide 唯一的回頭路。
+  const home = scaffold('proj', 'proj2')
+  run(home, 'hide', ['proj'])
+  run(home, 'hide', ['proj2'])
+  const r = run(home, 'show', ['proj'])
+  assert.equal(r.code, 0, r.err)
+  assert.equal(readPrefsOf(home).projects[join(home, 'proj')]?.hidden, false)
+  assert.equal(readPrefsOf(home).projects[join(home, 'proj2')]?.hidden, true, '不該動到另一個')
+})
+
+test('用完整路徑也 show 得回來', () => {
+  const home = scaffold('proj', 'proj2')
+  run(home, 'hide', ['proj'])
+  run(home, 'hide', ['proj2'])
+  assert.equal(run(home, 'show', [join(home, 'proj')]).code, 0)
+})
+
+test('真正歧義時仍然列候選，不自動挑', () => {
+  const home = scaffold('alpha-one', 'alpha-two')
+  run(home, 'hide', ['alpha-one'])
+  run(home, 'hide', ['alpha-two'])
+  const r = run(home, 'show', ['alpha'])
+  assert.equal(r.code, 1)
+  assert.match(r.err, /alpha-one/)
+  assert.match(r.err, /alpha-two/)
+})

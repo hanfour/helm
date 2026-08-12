@@ -70,3 +70,19 @@ test('doctor 不會把認不得的新 live 檔清掉', () => {
   captureSync(home, () => runDoctor([]))
   assert.equal(existsSync(evidence), true, '那可能是唯一一份當機證據')
 })
+
+test('看板不可信時不清理 —— 刪掉的可能正是那個壞掉的檔案所描述的 session', () => {
+  const home = scaffoldHome([{ project: 'proj', sessions: [{ id: 'aaaa1111-0000-1111-2222-333344445555' }] }])
+  captureSync(home, () => runInstall([]))
+  writeFileSync(join(home, '.claude', 'sessions', 'broken.json'), '{壞掉')
+  const id = 'aaaa1111-0000-1111-2222-333344445555'
+  const stale = join(home, '.helm', 'live', `${id}.json`)
+  writeFileSync(stale, JSON.stringify({ sessionId: id, ts: 0, toolName: 'Bash', summary: 'x' }))
+  const old = (Date.now() - 3600_000) / 1000
+  utimesSync(stale, old, old)
+  const r = captureSync(home, () => runDoctor([]))
+  assert.match(r.out, /✗ 註冊表解析/)
+  assert.ok(!r.out.includes('順手清掉'), '看板不可信時不該動任何 live 檔')
+  assert.equal(existsSync(stale), true)
+  assert.match(r.out, /先處理上面的問題/)
+})

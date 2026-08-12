@@ -2,6 +2,7 @@ import { basename } from 'node:path'
 import type { HelmPaths } from '../paths.ts'
 import { quarantinePath, readPrefs, setProjectPref, writePrefs } from '../projects/prefs.ts'
 import { collectStatus, currentPaths } from './status.ts'
+import { matchByTiers } from '../projects/resolve.ts'
 import { resolveOrReport } from './target.ts'
 
 export type PrefAction = 'pin' | 'unpin' | 'hide' | 'show'
@@ -68,10 +69,10 @@ function resolveHidden(
   query: string,
 ): string | null {
   const hidden = Object.entries(projects).filter(([, p]) => p.hidden).map(([path]) => path)
-  const q = query.trim().toLowerCase()
-  const matched = hidden.filter(
-    (p) => basename(p).toLowerCase().includes(q) || p.toLowerCase().includes(q),
-  )
+  // The same tiered matching `resolveTarget` uses. Reimplementing it here
+  // without the exact-match tier is what made `helm show proj` impossible once
+  // `proj2` was also hidden — and `show` is the only documented way back.
+  const matched = matchByTiers(hidden, query, (path) => [basename(path), path])
 
   if (matched.length === 1) return matched[0] as string
   if (matched.length > 1) {

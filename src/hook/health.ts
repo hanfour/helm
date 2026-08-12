@@ -1,5 +1,7 @@
-import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import {
+  accessSync, constants, existsSync, readFileSync, readdirSync, rmSync, statSync,
+} from 'node:fs'
+import { dirname, join } from 'node:path'
 import type { Board } from '../board.ts'
 import type { HelmPaths } from '../paths.ts'
 import { quarantinePath } from '../projects/prefs.ts'
@@ -24,14 +26,53 @@ export function runChecks(paths: HelmPaths, board: Board): Check[] {
     hookErrors(paths),
     hookEnabled(),
     liveDir(paths),
+    dataSources(paths),
     registryParse(paths, board),
     prefsHealth(paths, board),
     swiftbar(paths),
   ]
 }
 
+/**
+ * `readRegistry` returns `invalid: 0` when it cannot read the directory at
+ * all, so the largest possible failure of the primary data source is invisible
+ * to the check named after it. This one asks the filesystem directly.
+ */
+function dataSources(paths: HelmPaths): Check {
+  const unreadable = [paths.claudeSessions, paths.claudeProjects].filter(
+    (d) => existsSync(d) && !canRead(d),
+  )
+  if (unreadable.length > 0) {
+    return {
+      name: '資料來源',
+      ok: false,
+      detail: `讀不到 ${unreadable.join('、')}，看板會是空的但不會報錯。檢查權限。`,
+    }
+  }
+  const missing = [paths.claudeSessions, paths.claudeProjects].filter((d) => !existsSync(d))
+  return missing.length === 0
+    ? { name: '資料來源', ok: true, detail: '皆可讀取' }
+    : {
+      name: '資料來源',
+      ok: true,
+      detail: `${missing.join('、')} 尚不存在 —— Claude Code 還沒建立它們，屬正常。`,
+    }
+}
+
 function hookInstalled(paths: HelmPaths): Check {
-  const ok = hasHelmHook(readJson(paths.claudeSettings))
+  const settings = readJson(paths.claudeSettings)
+  // "Cannot read the file" is not "the hook is not installed". Saying the
+  // latter sends the user to `helm install`, which refuses to run on an
+  // unparseable settings.json — advice that walks in a circle. The hook may
+  // well be installed and another tool may have broken the file.
+  if (settings === UNREADABLE) {
+    return {
+      name: 'PreToolUse hook',
+      ok: false,
+      detail: `${paths.claudeSettings} 無法解析，因此無從得知 hook 是否安裝。先修好那個檔案。`,
+    }
+  }
+  const ok = hasHelmHook(settings)
   return {
     name: 'PreToolUse hook',
     ok,
@@ -48,13 +89,24 @@ function hookInstalled(paths: HelmPaths): Check {
  * errors really would just vanish.
  */
 function hookErrors(paths: HelmPaths): Check {
+  // The log being unwritable is worse than the log having contents: every hook
+  // error lands there, so if it cannot be opened the hook writes nothing at
+  // all — and this very check would report "no errors" while the board stays
+  // permanently empty.
+  if (!canWriteTo(paths.hookErrorsLog)) {
+    return {
+      name: 'hook 錯誤紀錄',
+      ok: false,
+      detail: `${paths.hookErrorsLog} 寫不進去，hook 會完全停擺而且不會留下任何線索。檢查 ${paths.helmHome} 的權限。`,
+    }
+  }
   const lines = readLines(paths.hookErrorsLog)
   if (lines.length === 0) return { name: 'hook 錯誤紀錄', ok: true, detail: '沒有錯誤' }
   const tail = lines.slice(-ERROR_TAIL_LINES).map((l) => `    ${l}`).join('\n')
   return {
     name: 'hook 錯誤紀錄',
     ok: false,
-    detail: `${lines.length} 行錯誤，最後 ${Math.min(lines.length, ERROR_TAIL_LINES)} 行：\n${tail}`,
+    detail: `${paths.hookErrorsLog} 有 ${lines.length} 行錯誤，最後 ${Math.min(lines.length, ERROR_TAIL_LINES)} 行：\n${tail}\n    處理完可直接清掉這個檔案。`,
   }
 }
 
@@ -69,13 +121,22 @@ function hookEnabled(): Check {
 }
 
 function liveDir(paths: HelmPaths): Check {
-  const ok = isDir(paths.helmLive)
+  if (!isDir(paths.helmLive)) {
+    return {
+      name: 'live 目錄',
+      ok: false,
+      detail: `${paths.helmLive} 不存在，hook 會寫不進去。執行 helm install。`,
+    }
+  }
+  // The failure text has always been "the hook cannot write there", so check
+  // that rather than mere existence.
+  const writable = canWrite(paths.helmLive)
   return {
     name: 'live 目錄',
-    ok,
-    detail: ok
+    ok: writable,
+    detail: writable
       ? paths.helmLive
-      : `${paths.helmLive} 不存在，hook 會寫不進去。執行 helm install。`,
+      : `${paths.helmLive} 不可寫，hook 會寫不進去。檢查它的權限。`,
   }
 }
 
@@ -173,6 +234,30 @@ function listJson(dir: string): string[] {
   }
 }
 
+const UNREADABLE = Symbol('unreadable')
+
+function canRead(path: string): boolean {
+  return canAccess(path, constants.R_OK | constants.X_OK)
+}
+
+function canWrite(path: string): boolean {
+  return canAccess(path, constants.W_OK)
+}
+
+/** A file helm may not have created yet is writable if its directory is. */
+function canWriteTo(file: string): boolean {
+  return existsSync(file) ? canWrite(file) : canWrite(dirname(file))
+}
+
+function canAccess(path: string, mode: number): boolean {
+  try {
+    accessSync(path, mode)
+    return true
+  } catch {
+    return false
+  }
+}
+
 function isDir(path: string): boolean {
   try {
     return statSync(path).isDirectory()
@@ -181,13 +266,13 @@ function isDir(path: string): boolean {
   }
 }
 
+/** Missing and unparseable are different findings and must not be merged. */
 function readJson(file: string): unknown {
+  if (!existsSync(file)) return null
   try {
     return JSON.parse(readFileSync(file, 'utf8'))
   } catch {
-    // A missing or corrupt settings.json is itself the finding; returning null
-    // lets `hasHelmHook` report "not installed" rather than throwing.
-    return null
+    return UNREADABLE
   }
 }
 

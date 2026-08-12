@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { resolvePaths } from '../paths.ts'
@@ -196,4 +196,68 @@ test('超過 30 天的壞檔仍然清得掉 —— 不能無限累積', () => {
   const old = (NOW - 31 * DAY) / 1000
   utimesSync(f, old, old)
   assert.deepEqual(sweepStaleLive(resolvePaths({ home: h }), board(), NOW), ['ancient.json'])
+})
+
+test('資料來源整個讀不到時檢查不通過 —— invalid: 0 不代表健康', () => {
+  // readRegistry 讀不到目錄時回 invalid: 0，於是主要資料來源最大的失敗模式
+  // 對那個以它命名的檢查完全隱形。
+  const h = home()
+  const sessions = join(h, '.claude', 'sessions')
+  mkdirSync(sessions, { recursive: true })
+  chmodSync(sessions, 0o000)
+  try {
+    const c = find(runChecks(resolvePaths({ home: h }), board()), '資料來源')
+    assert.equal(c?.ok, false)
+    assert.match(c?.detail ?? '', /sessions/)
+  } finally {
+    chmodSync(sessions, 0o755)
+  }
+})
+
+test('live 目錄存在但不可寫時檢查不通過 —— 那正是這一項在講的事', () => {
+  const h = home()
+  const live = join(h, '.helm', 'live')
+  mkdirSync(live, { recursive: true })
+  chmodSync(live, 0o500)
+  try {
+    const c = find(runChecks(resolvePaths({ home: h }), board()), 'live')
+    assert.equal(c?.ok, false)
+    assert.match(c?.detail ?? '', /寫/)
+  } finally {
+    chmodSync(live, 0o755)
+  }
+})
+
+test('錯誤紀錄寫不進去時檢查不通過 —— 否則 hook 停擺而 doctor 全綠', () => {
+  // hook 的錯誤全部導向那個檔案。它本身開不起來時，hook 一個 marker 都寫
+  // 不出來，而讀它的檢查必然回報「沒有錯誤」。
+  const h = home()
+  mkdirSync(join(h, '.helm'), { recursive: true })
+  chmodSync(join(h, '.helm'), 0o500)
+  try {
+    const c = find(runChecks(resolvePaths({ home: h }), board()), '錯誤紀錄')
+    assert.equal(c?.ok, false)
+  } finally {
+    chmodSync(join(h, '.helm'), 0o755)
+  }
+})
+
+test('settings.json 解析不了時說的是「讀不到」，而不是「未安裝」', () => {
+  // 回報「未安裝」並叫使用者跑 helm install，而 install 會拒絕執行 ——
+  // 建議在原地打轉。而且 hook 可能其實裝著，只是檔案被別的工具弄壞了。
+  const h = home()
+  writeFileSync(join(h, '.claude', 'settings.json'), '{壞掉')
+  const c = find(runChecks(resolvePaths({ home: h }), board()), 'hook')
+  assert.equal(c?.ok, false)
+  assert.match(c?.detail ?? '', /無法解析/)
+  assert.ok(!(c?.detail ?? '').includes('helm install'), '不該叫使用者跑一個會拒絕執行的指令')
+})
+
+test('hook 錯誤紀錄的說明要講出檔案在哪、以及可以清掉', () => {
+  const h = home()
+  mkdirSync(join(h, '.helm'), { recursive: true })
+  writeFileSync(join(h, '.helm', 'hook-errors.log'), 'boom\n')
+  const c = find(runChecks(resolvePaths({ home: h }), board()), '錯誤紀錄')
+  assert.match(c?.detail ?? '', /hook-errors\.log/)
+  assert.match(c?.detail ?? '', /清/)
 })

@@ -23,18 +23,7 @@ export function resolveTarget(
   const q = query.trim().toLowerCase()
   if (q === '') return { kind: 'notfound' }
 
-  // Tried in order, first non-empty tier wins. Exact beats partial, otherwise
-  // `data-svc-2.0` would be dragged into ambiguity by `data-svc-2.0-clone`
-  // merely containing it. Paths are tried after names because names are what
-  // the user types — but they must be tried, since `labelsOf` hands back full
-  // paths to disambiguate and a candidate you cannot retype is a dead end.
-  const tiers = [
-    projects.filter((p) => p.name.toLowerCase() === q),
-    projects.filter((p) => p.path.toLowerCase() === q),
-    projects.filter((p) => p.name.toLowerCase().includes(q)),
-    projects.filter((p) => p.path.toLowerCase().includes(q)),
-  ]
-  const matched = tiers.find((t) => t.length > 0) ?? []
+  const matched = matchByTiers(projects, q, (p) => [p.name, p.path])
   if (matched.length === 1) return { kind: 'project', project: matched[0] as ProjectView }
   if (matched.length > 1) return { kind: 'ambiguous', candidates: labelsOf(matched) }
 
@@ -50,6 +39,32 @@ function resolveSession(projects: readonly ProjectView[], q: string): ResolveRes
     return { kind: 'ambiguous', candidates: hits.map((s) => s.sessionId) }
   }
   return { kind: 'notfound' }
+}
+
+/**
+ * Exact before partial, and names before paths. Exact-first is what stops
+ * `data-svc-2.0` being dragged into ambiguity by `data-svc-2.0-clone` merely
+ * containing it — without that tier, a query can be a strict prefix of another
+ * candidate and there is then no string at all that selects it, which makes
+ * "type more of it" impossible advice rather than merely unhelpful.
+ *
+ * Shared so every place that resolves a user-typed name behaves the same way.
+ */
+export function matchByTiers<T>(
+  items: readonly T[],
+  query: string,
+  keysOf: (item: T) => readonly string[],
+): T[] {
+  const q = query.trim().toLowerCase()
+  if (q === '') return []
+  const keyed = items.map((item) => ({ item, keys: keysOf(item).map((k) => k.toLowerCase()) }))
+  const tiers = [
+    keyed.filter((e) => e.keys[0] === q),
+    keyed.filter((e) => e.keys.some((k) => k === q)),
+    keyed.filter((e) => (e.keys[0] ?? '').includes(q)),
+    keyed.filter((e) => e.keys.some((k) => k.includes(q))),
+  ]
+  return (tiers.find((t) => t.length > 0) ?? []).map((e) => e.item)
 }
 
 /**
