@@ -2362,40 +2362,63 @@ $ env -i HOME="$HOME" PATH="/usr/bin:/bin:/usr/sbin:/sbin" ~/SwiftBar/helm.5s.sh
 
 ---
 
-## 效能契約的現況（2026-08-12 量測，未達標）
+## 效能契約的現況（2026-08-12，**先前的結論是錯的**）
 
-契約是 `helm menu` 200ms。**目前實測 422ms，超過一倍。**
+一度記錄成「`helm menu` 422ms，超過 200ms 契約一倍」。**那個數字是量測雜訊，
+不是 helm 的成本。**
 
-從 shell 量，每項連跑 10 次取平均（不要從 Node 行程 spawn，那會得到膨脹
-3 倍的假數字；也不要用 `python3` 包時間戳，它自己的啟動成本會混進來）：
-
-```
-node -e ''         48 ms   ← Node 自身下限
-helm help          81 ms   ← 純 module 載入，與 2026-08-12 的紀錄一致
-helm menu         422 ms
-helm status --json 407 ms
-```
-
-**多出來的成本不是這一輪引入的，是資料量長大了。** `helm help` 仍然是
-81ms，所以啟動路徑沒有退化。本機 `~/.claude/projects` 現在是 1.5 GB、
-2,898 個 jsonl、177 個 session。
-
-CPU profile 顯示 168ms 的 CPU 時間，沒有單一熱點：
+發現的方式：`node -e ''` —— 一個什麼都不做的指令 —— 在同一台機器上也會
+從 41ms 跳到 285ms。
 
 ```
-21.9 ms  (program)
-16.8 ms  __require
-14.2 ms  Module
-13.0 ms  child_process:spawnSync     ← ps
- 7.5 ms  compileSourceTextModule
- 5.3 ms  readdir
+node -e '' 外部量測 15 次，排序後：
+0.041 0.042 0.042 0.043 0.043 0.043 0.045 0.051 0.052 0.285
 ```
 
-其餘約 250ms 是 I/O 等待。也就是說要達標得同時處理 module 載入、`ps`、
-與檔案掃描三件事 —— 那是一塊獨立的重構，不該混在 review 修正裡。
+這台機器同時跑著好幾個 agent session，load average 在 5 到 15 之間。
+行程啟動本身就會排隊等，而 `time` 顯示的 CPU 使用率從 152% 掉到 13% ——
+也就是說 87% 的時間在等排程，不是在算。
 
-**現在做的是止血，不是達標：** 桌面 widget 的 `refreshFrequency` 從 5 秒
-改成 10 秒。Übersicht 把這個值**同時當成 HTTP 逾時**
-（`client.js` 的 `runShellCommand(...).timeout(refreshFrequency)`），而
-`status --json` 在機器忙時 p90 是 2.4 秒、最差 7.2 秒 —— 用 5 秒的話桌面
-會不定時整片變成逾時錯誤訊息。選單列維持 5 秒，它沒有這個限制。
+**用行程內部的 `process.uptime()` 量，不受外部排程干擾：**
+
+```
+ 11 ms  script 開始（node 自身啟動）
+ 60 ms  menu.ts 及其相依模組載入完
+ 89 ms  runMenu 執行完
+ 89 ms  行程結束
+```
+
+五次重複：85 / 91 / 93 / 100 / 156 ms。加上 uptime 起算之前的 dyld 與 V8
+初始化（約 40ms，從 `node -e ''` 的 min 推得），**真實成本約 130ms，
+在 200ms 契約內。**
+
+各階段（同樣用內部量測）：
+
+```
+scanTranscripts   10-20 ms   （28 個目錄、525 個頂層 jsonl）
+menu.ts 模組載入  ~49 ms
+runMenu 執行      ~29 ms
+```
+
+`scan.ts` 註解裡「499 個 transcript、6.9ms」的紀錄依然成立 —— 現在是 525 個。
+那個 2,898 的數字是 `~/.claude/projects` 底下的**全部** jsonl，其中絕大多數在
+巢狀的 `<session-id>/` 目錄裡，而 scan 刻意不遞迴。
+
+### 教訓：外部 wall-clock 在忙碌的機器上量不出東西
+
+三個獨立的量測都掉進同一個坑（我的、reviewer 的、以及計畫早先的紀錄）。
+可用的做法，依可信度排序：
+
+1. **行程內部的 `process.uptime()`** —— 完全避開外部排程
+2. **交錯取樣後取最小值** —— 負載只會讓時間變長，不會變短
+3. 單次 `time` —— 不可信，除非機器確定是空的
+
+`src/cli/menu.test.ts` 的兩條效能斷言已經改用第 2 種（五次取最小）。
+
+### 桌面 widget 的 10 秒間隔
+
+保留，但理由要說準：不是因為 helm 慢，而是 Übersicht 把 `refreshFrequency`
+**同時當成 HTTP 逾時**（`client.js` 的 `runShellCommand(...).timeout(...)`），
+而這台機器的常態就是同時跑好幾個 agent。實測在 load 15 時外部 wall clock
+會到 968ms —— 距離 5 秒仍有餘裕，但 10 秒讓這件事完全不必擔心，
+而桌面看板本來就是掃一眼的東西。選單列維持 5 秒。
