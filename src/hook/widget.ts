@@ -123,6 +123,8 @@ function ago(ms, nowMs) {
 function notesOf(board) {
   const notes = []
   for (const f of board.adapterFailures || []) notes.push(f)
+  // 跟選單列說同一句話。兩個呈現面對同一件事給不同說法，比少講一件事更糟。
+  if (board.prDegraded) notes.push(board.prDegraded)
   if (board.invalid > 0) notes.push('有 ' + board.invalid + ' 個 session 記錄無法解析')
   if (board.prefsHealth && board.prefsHealth !== 'ok') {
     notes.push('偏好檔無法解析，釘選與隱藏沒有生效')
@@ -170,6 +172,13 @@ function viewOf(output, error, nowMs) {
     rows: projects.map((p) => rowOf(p, nowMs)),
     // 「沒有找到 session」是錯的：session 通常還在，只是被時間窗口、
     // 非 git repo、或 helm hide 濾掉了。照這句話去找會找錯方向。
+    // PR 自成一區，不掛在專案底下：GitHub 的 owner/repo 對不回本機路徑，
+    // 對不上的就會整個消失。而「有哪些 PR 在等我」本來也不是專案層級的問題。
+    prs: (board.prs || []).map((pr) => ({
+      key: pr.repo + '#' + pr.number,
+      text: pr.repo + '#' + pr.number + '  ' + pr.waitingLabel,
+      title: pr.title || '',
+    })),
     empty: projects.length === 0
       ? '沒有符合條件的專案（近 ' + WINDOW_DAYS + ' 天內有活動且是 git repo）'
       : null,
@@ -299,6 +308,14 @@ export const render = ({ output, error }) => {
           {r.live ? <div style={{ ...dim, ...clip, paddingLeft: '14px' }}>{r.live}</div> : null}
         </div>
       ))}
+
+      {view.prs.length > 0 ? (
+        <div style={{ marginTop: '8px', paddingTop: '6px', borderTop: '1px solid rgba(255,255,255,0.12)' }}>
+          {view.prs.map((pr) => (
+            <div key={pr.key} style={{ ...dim, ...clip }}>{pr.text}</div>
+          ))}
+        </div>
+      ) : null}
 
       {view.notes.map((n) => (
         <div key={n} style={{ ...dim, ...clip, color: '#fbbf24', marginTop: '6px' }}>⚠ {n}</div>

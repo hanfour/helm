@@ -3,6 +3,9 @@ import { join } from 'node:path'
 import { discoverClaudeCode } from '../adapters/claude-code/discover.ts'
 import { defaultCodexDeps, discoverCodex } from '../adapters/codex/discover.ts'
 import { collectFromAdapters } from '../adapters/registry.ts'
+import { kickRefreshIfStale } from '../remote/kick.ts'
+import { prPaths } from '../remote/paths.ts'
+import { spawnPrRefresh } from '../remote/spawn.ts'
 import { queryProcesses, type ProcessProbe } from '../adapters/claude-code/processes.ts'
 import type { Board } from '../board.ts'
 import { resolvePaths, type HelmPaths } from '../paths.ts'
@@ -65,7 +68,18 @@ export function collectStatus(
     isGitRepo: (p) => existsSync(join(p, '.git')),
     home: paths.home,
   })
-  return { projects, invalid, prefsHealth, adapterFailures: failures }
+  // Reads a small JSON file and, when it is stale, forks a detached refresh
+  // that this process never waits for (spec §10). A `gh` sweep measures 1.9 s
+  // against a board that redraws every 5 s; they must never meet.
+  const prCache = kickRefreshIfStale(prPaths(paths), nowMs, () => spawnPrRefresh(paths))
+  return {
+    projects,
+    invalid,
+    prefsHealth,
+    adapterFailures: failures,
+    prs: prCache?.prs ?? [],
+    prDegraded: prCache?.degraded ?? null,
+  }
 }
 
 function mtimeMs(path: string): number | null {

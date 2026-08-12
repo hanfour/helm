@@ -34,7 +34,7 @@ const board = (
     aggregateStatus: null, sessionCount: sessions.length, sessions,
   }],
   invalid: 0,
-  prefsHealth: 'ok' as const, adapterFailures: [],
+  prefsHealth: 'ok' as const, adapterFailures: [], prs: [], prDegraded: null,
   ...over,
 })
 
@@ -110,7 +110,7 @@ test('註冊表有解析失敗時如實回報數量 —— table.ts 承諾過這
 })
 
 test('偏好檔毀損時回報，並指出原檔被保留在哪', () => {
-  const c = find(checksOf(home(), board([], { prefsHealth: 'quarantined' as const, adapterFailures: [] })), '偏好')
+  const c = find(checksOf(home(), board([], { prefsHealth: 'quarantined' as const, adapterFailures: [], prs: [], prDegraded: null })), '偏好')
   assert.equal(c?.ok, false)
   assert.match(c?.detail ?? '', /corrupt/)
 })

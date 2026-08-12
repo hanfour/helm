@@ -25,7 +25,7 @@ const proj = (over: Partial<ProjectView> = {}): ProjectView => {
 }
 
 const board = (projects: ProjectView[], over: Partial<Board> = {}): Board =>
-  ({ projects, invalid: 0, prefsHealth: 'ok' as const, adapterFailures: [], ...over })
+  ({ projects, invalid: 0, prefsHealth: 'ok' as const, adapterFailures: [], prs: [], prDegraded: null, ...over })
 
 const title = (out: string) => out.split('\n')[0] ?? ''
 const body = (out: string) => out.slice(out.indexOf('\n---\n'))
@@ -108,7 +108,7 @@ test('註冊表解析失敗時在選單裡明講，不靜默隱藏', () => {
 })
 
 test('偏好檔毀損時也在選單裡明講', () => {
-  assert.match(renderSwiftBar(board([proj()], { prefsHealth: 'quarantined' as const, adapterFailures: [] }), OPTS), /偏好檔/)
+  assert.match(renderSwiftBar(board([proj()], { prefsHealth: 'quarantined' as const, adapterFailures: [], prs: [], prDegraded: null }), OPTS), /偏好檔/)
 })
 
 test('pinned 專案顯示釘選記號', () => {
@@ -244,7 +244,7 @@ test('名字被清成空字串時仍有可辨識的標示', () => {
 test('空看板時降級警告仍然顯示 —— 那正是最需要它的時候', () => {
   // prefs 毀損 → 釘選失效 → 靠 pin 豁免 14 天窗口的專案全部消失 →
   // 使用者只看到「沒有符合條件的專案」，一個字都沒提到有東西壞掉。
-  const out = renderSwiftBar(board([], { invalid: 7, prefsHealth: 'quarantined' as const, adapterFailures: [] }), OPTS)
+  const out = renderSwiftBar(board([], { invalid: 7, prefsHealth: 'quarantined' as const, adapterFailures: [], prs: [], prDegraded: null }), OPTS)
   assert.match(out, /7 個/)
   assert.match(out, /偏好檔/)
 })
@@ -353,4 +353,37 @@ test('多個專案時數的是專案數', () => {
     proj({ path: '/c', aggregateStatus: 'idle' }),
   ]), OPTS)
   assert.match(title(out), /⚓ 2 在跑/, title(out))
+})
+
+test('PR 獨立一區，每行說出在等誰', () => {
+  const out = renderSwiftBar(board([proj({})], {
+    prs: [
+      { repo: 'a/b', number: 142, title: 'feat: x', url: 'https://gh/a/b/pull/142', isDraft: false, updatedAt: '', waiting: 'review', waitingLabel: '等人審' },
+      { repo: 'a/c', number: 7, title: 'fix: y', url: 'https://gh/a/c/pull/7', isDraft: false, updatedAt: '', waiting: 'changes', waitingLabel: '等你改' },
+    ],
+  }), OPTS)
+  assert.match(body(out), /a\/b#142/)
+  assert.match(body(out), /等人審/)
+  assert.match(body(out), /a\/c#7/)
+  assert.match(body(out), /等你改/)
+})
+
+test('PR 那一行可以點開瀏覽器', () => {
+  const out = renderSwiftBar(board([proj({})], {
+    prs: [{ repo: 'a/b', number: 1, title: 't', url: 'https://gh/a/b/pull/1', isDraft: false, updatedAt: '', waiting: 'review', waitingLabel: '等人審' }],
+  }), OPTS)
+  assert.match(body(out), /href=https:\/\/gh\/a\/b\/pull\/1/)
+})
+
+test('沒有 PR 時不畫那一區 —— 不佔空間也不說謊', () => {
+  const out = renderSwiftBar(board([proj({})], { prs: [] }), OPTS)
+  assert.doesNotMatch(body(out), /PR/)
+})
+
+test('PR 讀不到時說出原因與下一步，而不是靜靜留白', () => {
+  const out = renderSwiftBar(board([proj({})], {
+    prs: [], prDegraded: 'gh 尚未登入，PR 狀態無法取得。執行 gh auth login。',
+  }), OPTS)
+  assert.match(body(out), /gh auth login/)
+  assert.match(body(out), /color=orange/)
 })

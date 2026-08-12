@@ -1,5 +1,6 @@
 import type { ProjectView } from './projects/group.ts'
 import type { PrefsHealth } from './projects/prefs.ts'
+import type { CachedPr } from './remote/cache.ts'
 
 /**
  * What the board knows after one fast-path collection. Lives here rather than
@@ -20,4 +21,8 @@ export interface Board {
    * making — reporting success for work that did not happen.
    */
   adapterFailures: string[]
+  /** Open pull requests the user opened, from the 60-second cache (spec §10). */
+  prs: CachedPr[]
+  /** Why there are none, when that is the reason. Never silently empty. */
+  prDegraded: string | null
 }

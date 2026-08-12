@@ -74,10 +74,37 @@ function renderBody(board: Board, opts: MenuOptions): string[] {
   if (board.projects.length === 0) {
     return [`沒有符合條件的專案（近 ${ACTIVITY_WINDOW_DAYS} 天內有活動且是 git repo）`, ...warnings]
   }
-  return [...board.projects.flatMap((p) => renderProject(p, opts)), ...warnings]
+  return [
+    ...board.projects.flatMap((p) => renderProject(p, opts)),
+    ...renderPrs(board, opts),
+    ...warnings,
+  ]
 }
 
 /** Degradation must be visible here too, not only in the terminal view. */
+/**
+ * A section of its own, not a line under each project.
+ *
+ * Mapping `owner/repo` back to a local path would mean reading every
+ * project's git remote, and anything that failed to match would simply
+ * vanish — measured here, the only open pull request belongs to a repository
+ * that is not on the board at all. The question this answers is "what is
+ * waiting on me", which was never a per-project question anyway.
+ */
+function renderPrs(board: Board, opts: MenuOptions): string[] {
+  if (board.prDegraded !== null) {
+    return ['---', `⚠ ${clean(board.prDegraded)} | color=orange`]
+  }
+  if (board.prs.length === 0) return []
+  return [
+    '---',
+    'PR',
+    ...board.prs.map((pr) =>
+      `--${clean(`${pr.repo}#${pr.number}`)}  ${clean(pr.waitingLabel)}  ${label(pr.title)}`
+      + ` | href=${clean(pr.url)}`),
+  ]
+}
+
 function renderWarnings(board: Board, opts: MenuOptions): string[] {
   const rows: string[] = []
   if (board.invalid > 0) {

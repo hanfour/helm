@@ -94,7 +94,7 @@ const proj = (over: Record<string, unknown> = {}) => ({
   ...over,
 })
 const board = (over: Record<string, unknown> = {}) =>
-  ({ projects: [], invalid: 0, prefsHealth: 'ok', adapterFailures: [], ...over })
+  ({ projects: [], invalid: 0, prefsHealth: 'ok', adapterFailures: [], prs: [], prDegraded: null, ...over })
 
 test('helm 失敗時畫出錯誤，不是畫一片空白', () => {
   // `if (error)` → `if (false)` used to survive the whole suite: the old test
@@ -191,7 +191,7 @@ test('相對時間用 Math.floor，跟選單列的 relativeTime 完全一致', (
 })
 
 test('看板自己回報的降級也要畫出來 —— 選單列一直都有畫', () => {
-  const v = view(board({ projects: [proj()], invalid: 3, prefsHealth: 'quarantined', adapterFailures: [] })) as
+  const v = view(board({ projects: [proj()], invalid: 3, prefsHealth: 'quarantined', adapterFailures: [], prs: [], prDegraded: null })) as
     unknown as { notes: string[] }
   assert.ok(v.notes.some((n) => n.includes('3')), v.notes.join('|'))
   assert.ok(v.notes.some((n) => n.includes('釘選')), v.notes.join('|'))
@@ -331,4 +331,28 @@ test('live 只有工具名沒有摘要時仍顯示工具名 —— 選單列顯�
     })],
   })) as unknown as { rows: { live: string | null }[] }).rows
   assert.equal(rows[0]?.live, 'Read')
+})
+
+test('PR 進 view 的自己一區，每筆說出在等誰', () => {
+  const prs = [
+    { repo: 'a/b', number: 142, waitingLabel: '等人審', title: 'feat: x', url: 'u' },
+    { repo: 'a/c', number: 7, waitingLabel: '等你改', title: 'fix: y', url: 'u2' },
+  ]
+  const v = view(board({ projects: [proj()], prs })) as unknown as
+    { prs: { text: string }[] }
+  assert.equal(v.prs.length, 2)
+  assert.match(v.prs[0]?.text ?? '', /a\/b#142/)
+  assert.match(v.prs[0]?.text ?? '', /等人審/)
+})
+
+test('PR 讀不到時進 notes，跟選單列說同一句話', () => {
+  const v = view(board({ projects: [proj()], prs: [], prDegraded: 'gh 尚未登入，執行 gh auth login。' })) as
+    unknown as { notes: string[]; prs: unknown[] }
+  assert.ok(v.notes.some((n) => n.includes('gh auth login')), v.notes.join('|'))
+  assert.deepEqual(v.prs, [])
+})
+
+test('沒有 PR 也沒有錯誤時那一區是空的', () => {
+  const v = view(board({ projects: [proj()] })) as unknown as { prs: unknown[] }
+  assert.deepEqual(v.prs, [])
 })
