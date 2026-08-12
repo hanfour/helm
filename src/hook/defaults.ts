@@ -20,16 +20,35 @@ export function prefsFor(bundleId: string): PrefsIO {
   }
 }
 
+/**
+ * Read through `plutil`, not through `defaults read`.
+ *
+ * `defaults read <domain> <key>` prints old-style plist, which escapes every
+ * non-ASCII character: Übersicht's own widget folder came back as
+ * `…/Application Support/\334bersicht/widgets`. helm then looked for a
+ * directory by that literal name, did not find one, and reported the widget
+ * as missing seconds after installing it.
+ *
+ * Two spawns instead of one. This runs during install and doctor only — never
+ * on the five-second path — so correctness is worth the ~10 ms.
+ */
 function readPref(bundleId: string, key: string): string | null {
   try {
-    const out = execFileSync('defaults', ['read', bundleId, key], {
-      encoding: 'utf8',
+    const plist = execFileSync('defaults', ['export', bundleId, '-'], {
       stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim()
-    return out === '' ? null : out
+    })
+    const out = execFileSync('plutil', ['-extract', key, 'raw', '-o', '-', '-'], {
+      input: plist,
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'ignore'],
+    })
+    // `plutil` appends exactly one newline of its own; anything else in the
+    // value is the value. `.trim()` here would silently eat a trailing space.
+    const value = out.endsWith('\n') ? out.slice(0, -1) : out
+    return value === '' ? null : value
   } catch {
-    // `defaults` exits non-zero when the domain or the key does not exist,
-    // which is the normal state before the app has ever been configured.
+    // Either command exits non-zero when the domain or the key does not
+    // exist, which is the normal state before the app has been configured.
     return null
   }
 }
