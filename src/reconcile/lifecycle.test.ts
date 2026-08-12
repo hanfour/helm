@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { decideLifecycle, reconcileSessions } from './lifecycle.ts'
+import { decideCodexLifecycle, decideLifecycle, reconcileSessions } from './lifecycle.ts'
 import type { LiveMarker, DiscoveredSession } from '../types.ts'
 
 const PROC_START = 'Thu Aug  6 06:16:12 2026'
@@ -10,6 +10,8 @@ const PS_OTHER = fmtLocal(new Date(Date.UTC(2026, 7, 6, 9, 30, 0)))
 
 const marker = (ts: number): LiveMarker =>
   ({ sessionId: 's', ts, toolName: 'Bash', summary: 'git status', degraded: false })
+
+const DAY = Date.UTC(2026, 7, 12, 12, 0, 0)
 
 test('註冊表在、但根本問不到 PID 的狀態 → 低信心，不當成死亡證據', () => {
   // ps 整個掛掉時，每一個 session 都會走到這裡。若判成高信心 crashed，
@@ -156,4 +158,53 @@ test('壞掉的 live marker 早於 transcript → ended_clean 但信心降為 lo
     procStart: null, live: { ...marker(3000), degraded: true }, transcriptMtimeMs: 4000,
   })
   assert.deepEqual(r, { lifecycle: 'ended_clean', confidence: 'low' })
+})
+
+test('Codex：cwd 有 codex 行程在跑就是 running', () => {
+  // Codex 沒有 PID 註冊表，存活只能靠行程表比對 cwd（規格 §6）。
+  const v = decideCodexLifecycle({ cwdHasProcess: true, lastEventMs: 0, nowMs: DAY })
+  assert.equal(v.lifecycle, 'running')
+})
+
+test('Codex：沒有行程但最後事件在 30 分鐘內，仍算 running', () => {
+  // 防的是 ps 短暫抓不到就誤判成當機。
+  const v = decideCodexLifecycle({ cwdHasProcess: false, lastEventMs: DAY - 29 * 60_000, nowMs: DAY })
+  assert.equal(v.lifecycle, 'running')
+})
+
+test('Codex：沒有行程且超過 30 分鐘沒動靜 → crashed', () => {
+  const v = decideCodexLifecycle({ cwdHasProcess: false, lastEventMs: DAY - 31 * 60_000, nowMs: DAY })
+  assert.equal(v.lifecycle, 'crashed')
+})
+
+test('Codex：30 分鐘的兩側都要對', () => {
+  const at = (mins: number) =>
+    decideCodexLifecycle({ cwdHasProcess: false, lastEventMs: DAY - mins * 60_000, nowMs: DAY }).lifecycle
+  assert.equal(at(30), 'running', '剛好 30 分鐘還不算')
+  assert.equal(at(30.1), 'crashed')
+})
+
+test('Codex 永遠不會是 ended_clean —— 它沒有終止事件', () => {
+  // 這是規格 §6 明講的。把它畫成「已結束」等於宣稱一件 helm 無從得知的事。
+  for (const cwdHasProcess of [true, false]) {
+    for (const mins of [0, 1, 29, 30, 31, 60, 60 * 24 * 30]) {
+      const v = decideCodexLifecycle({ cwdHasProcess, lastEventMs: DAY - mins * 60_000, nowMs: DAY })
+      assert.notEqual(v.lifecycle, 'ended_clean', `${cwdHasProcess} / ${mins} 分鐘`)
+    }
+  }
+})
+
+test('Codex 的信心一律是 low —— UI 必須把它跟 Claude Code 的判定區分開', () => {
+  for (const cwdHasProcess of [true, false]) {
+    for (const mins of [0, 31, 60 * 24]) {
+      const v = decideCodexLifecycle({ cwdHasProcess, lastEventMs: DAY - mins * 60_000, nowMs: DAY })
+      assert.equal(v.confidence, 'low', `${cwdHasProcess} / ${mins} 分鐘`)
+    }
+  }
+})
+
+test('Codex：未來的時間戳不會被算成「超過 30 分鐘」', () => {
+  // 時鐘偏移或檔案被 touch 過都可能造成 lastEventMs > now。
+  const v = decideCodexLifecycle({ cwdHasProcess: false, lastEventMs: DAY + 60_000, nowMs: DAY })
+  assert.equal(v.lifecycle, 'running')
 })

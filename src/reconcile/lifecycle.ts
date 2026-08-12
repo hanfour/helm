@@ -109,3 +109,44 @@ export function reconcileSessions(
     return { ...s, lifecycle: verdict.lifecycle, lifecycleConfidence: verdict.confidence, live }
   })
 }
+
+/**
+ * How long a Codex session may sit with no process before helm calls it
+ * abandoned.
+ *
+ * Spec §6. This number is a judgement, not a measurement: it exists so a
+ * momentary failure to see the process — `pgrep` losing a race, `lsof`
+ * refused — does not flip a live session to crashed. Nobody has measured how
+ * long a real Codex session idles, so it gets a name and stays adjustable.
+ */
+export const CODEX_ABANDON_MS = 30 * 60_000
+
+export interface CodexLifecycleInput {
+  /** A running `codex` process whose cwd matches this session's. */
+  cwdHasProcess: boolean
+  /** Newest write to any of the session's rollout files. */
+  lastEventMs: number
+  nowMs: number
+}
+
+/**
+ * Codex's lifecycle rules (spec §6), which differ from Claude Code's in two
+ * ways that must not be smoothed over:
+ *
+ *   - **There is no clean-exit signal.** Codex writes no termination event, so
+ *     `ended_clean` is unreachable by construction. Drawing a Codex session as
+ *     "finished" would assert something helm cannot know.
+ *   - **Confidence is always low.** Everything here is inferred from a process
+ *     table and a file mtime, never from the tool saying so. The UI has to
+ *     show that difference rather than mixing it in with Claude Code's
+ *     registry-backed verdicts.
+ */
+export function decideCodexLifecycle(input: CodexLifecycleInput): LifecycleVerdict {
+  if (input.cwdHasProcess) return { lifecycle: 'running', confidence: 'low' }
+  // `Math.max(0, …)` because a clock skew or a touched file can put the last
+  // event in the future, and a negative age must not read as "long ago".
+  const idleMs = Math.max(0, input.nowMs - input.lastEventMs)
+  return idleMs > CODEX_ABANDON_MS
+    ? { lifecycle: 'crashed', confidence: 'low' }
+    : { lifecycle: 'running', confidence: 'low' }
+}

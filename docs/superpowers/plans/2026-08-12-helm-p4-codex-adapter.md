@@ -141,11 +141,11 @@ session_meta 的 payload 有 14 種形狀（2026-04 到 2026-08 的版本演進�
 | 無行程，最後事件距今 ≤ 30 分鐘 | `running` | `low` |
 | 無行程，最後事件距今 > 30 分鐘 | `crashed` | `low` |
 
-- [ ] **Step 1：寫失敗測試**——三條規則各一、邊界值 30 分鐘的兩側、**永遠不會回 `ended_clean`**（這條要對所有輸入組合斷言）、confidence 永遠是 `low`
-- [ ] **Step 2：紅**
-- [ ] **Step 3：實作**
-- [ ] **Step 4：綠**
-- [ ] **Step 5：commit**
+- [x] **Step 1：寫失敗測試**——三條規則各一、邊界值 30 分鐘的兩側、**永遠不會回 `ended_clean`**（這條要對所有輸入組合斷言）、confidence 永遠是 `low`
+- [x] **Step 2：紅**
+- [x] **Step 3：實作**
+- [x] **Step 4：綠**
+- [x] **Step 5：commit**
 
 ### Task 6：組裝 DiscoveredSession
 
