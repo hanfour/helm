@@ -2259,3 +2259,44 @@ export function readPrefsOf(home: string): PrefsFile {
 - **SwiftBar 仍未安裝**，因此選單列本身尚未實際跑起來過。
 - 兩者都需要使用者決定。在此之前，`helm menu` 的輸出格式、效能契約與所有分支
   邏輯都已由測試與真實資料驗證過（真實機器 `collectStatus` 57–63 ms）。
+
+---
+
+## 效能契約的量測方式（2026-08-12 修訂）
+
+規格 §11.2 寫「`helm menu` 每 5 秒執行一次，必須在 200ms 內完成」，指的是**一次真實的指令執行**。原本那條測試宣稱在守這件事，但守不住，原因有二：
+
+1. **它量錯了東西。** fixture 產生的 session 都沒有 `pid`，所以 `ps` 永遠不會被 spawn ——
+   那條斷言實際上是 `0.8ms < 200ms`，250 倍餘裕，不可能失敗。
+2. **牆鐘數字守不住。** `node --test` 平行跑各檔案。同一段程式碼單獨跑是 36ms，
+   在套件裡、機器 load 3.8 時是 **4,216ms**。一個隨無關負載浮動的預算是 flake
+   產生器，不是防線。
+
+因此契約拆成三個各自**確定性**的部分：
+
+| 守什麼 | 由誰守 |
+|---|---|
+| helm 自身的計算成本（演算法回歸） | `menu.test.ts` 的 60ms 預算 + 「四倍的量不該是四倍以上的時間」比值測試（stub 掉 `ps`） |
+| 慢速路徑不得混進來 | `menu.test.ts` 的 import 圖檢查（已用 reviewer 當初的變異驗證過會紅） |
+| `ps` 的策略 —— 剩下成本的大宗 | `processes.test.ts` 釘住「少於門檻逐一、超過才批次」 |
+
+**端對端數字則以量測記錄，不以斷言宣稱**（2026-08-12，從 shell 連續 5 次）：
+
+```
+node -e ''（Node 自身下限）   34-38 ms
+helm help（什麼都不做）        57-61 ms   ← 改 dynamic import 前是 99-111 ms
+helm menu                     130-150 ms  ← 改動前 190-250 ms
+```
+
+兩項改動各自的貢獻：
+
+- **dynamic import**：`main.ts` 原本靜態載入 brief/install/summarize/cache，
+  `helm menu` 每次都得付那份 module graph 的錢。省下約 43ms。
+- **`ps` 策略**：macOS 的 `ps -p a,b` 一旦超過一個 PID 就掃整張 process table，
+  實測固定 ~42ms；單一 PID 只要 ~3.4ms，交叉點在 12 個左右。看板平時只追蹤
+  幾個活著的 session，所以「批次比較有效率」這個直覺是反的。本機 3 個 PID
+  實測 39.8ms → 13.3ms。
+
+**注意量測方式本身。** 從一個持續變大的 Node 行程連續 spawn 會得到 360-390ms
+的假數字；從 shell 量才是 130-150ms。SwiftBar 是從它自己的 Swift 行程叫 plugin，
+接近後者。
