@@ -1,5 +1,5 @@
 import type { SessionState } from '../../types.ts'
-import { decideCodexLifecycle } from '../../reconcile/lifecycle.ts'
+import { CODEX_ABANDON_MS, decideCodexLifecycle } from '../../reconcile/lifecycle.ts'
 import { loadMetaCache, resolveMeta, type RolloutMeta } from './meta.ts'
 import { liveCodexCwds } from './processes.ts'
 import { scanRollouts, type RolloutFile } from './scan.ts'
@@ -77,9 +77,18 @@ export function discoverCodex(opts: CodexOptions, deps: CodexDeps): CodexResult 
     else group.files.push(file)
   }
 
-  const live = deps.liveCwds()
+  // Only sessions written to within the abandon window can be running, so
+  // there is nothing to ask the process table about unless one exists. That
+  // saves the 35.7 ms `pgrep` costs even when no Codex is running — 18% of the
+  // budget — and it is also the correct reading: a session last touched six
+  // days ago does not become "running" because some *other* codex now happens
+  // to be in the same directory.
+  const recent = [...groups.values()].some(
+    ({ files: group }) => opts.nowMs - newestOf(group).mtimeMs <= CODEX_ABANDON_MS,
+  )
+  const live = recent ? deps.liveCwds() : new Set<string>()
   const sessions = [...groups.entries()].flatMap(([sessionId, { cwd, files: group }]) => {
-    const newest = group.reduce((a, b) => (b.mtimeMs > a.mtimeMs ? b : a))
+    const newest = newestOf(group)
     const updatedAt = newest.mtimeMs
     // The window was widened above so pinned projects could survive the scan;
     // everything else outside it is dropped here, where the cwd is known.
@@ -117,6 +126,10 @@ export function discoverCodex(opts: CodexOptions, deps: CodexDeps): CodexResult 
 
   deps.flush()
   return { sessions, invalid }
+}
+
+function newestOf(group: readonly RolloutFile[]): RolloutFile {
+  return group.reduce((a, b) => (b.mtimeMs > a.mtimeMs ? b : a))
 }
 
 /**

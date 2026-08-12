@@ -83,6 +83,9 @@ function renderWarnings(board: Board, opts: MenuOptions): string[] {
   if (board.invalid > 0) {
     rows.push(`⚠ 有 ${board.invalid} 個 session 記錄無法解析 | color=orange`)
   }
+  for (const failure of board.adapterFailures) {
+    rows.push(`⚠ ${clean(failure)} | color=orange`)
+  }
   if (board.prefsHealth !== 'ok') {
     rows.push('⚠ 偏好檔無法解析，釘選與隱藏沒有生效 | color=orange')
   }

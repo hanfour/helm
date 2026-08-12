@@ -94,7 +94,7 @@ const proj = (over: Record<string, unknown> = {}) => ({
   ...over,
 })
 const board = (over: Record<string, unknown> = {}) =>
-  ({ projects: [], invalid: 0, prefsHealth: 'ok', ...over })
+  ({ projects: [], invalid: 0, prefsHealth: 'ok', adapterFailures: [], ...over })
 
 test('helm 失敗時畫出錯誤，不是畫一片空白', () => {
   // `if (error)` → `if (false)` used to survive the whole suite: the old test
@@ -191,7 +191,7 @@ test('相對時間用 Math.floor，跟選單列的 relativeTime 完全一致', (
 })
 
 test('看板自己回報的降級也要畫出來 —— 選單列一直都有畫', () => {
-  const v = view(board({ projects: [proj()], invalid: 3, prefsHealth: 'quarantined' })) as
+  const v = view(board({ projects: [proj()], invalid: 3, prefsHealth: 'quarantined', adapterFailures: [] })) as
     unknown as { notes: string[] }
   assert.ok(v.notes.some((n) => n.includes('3')), v.notes.join('|'))
   assert.ok(v.notes.some((n) => n.includes('釘選')), v.notes.join('|'))

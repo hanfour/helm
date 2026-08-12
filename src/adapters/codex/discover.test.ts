@@ -115,3 +115,40 @@ test('scan 丟例外時回空結果，不讓整個看板掛掉', () => {
   assert.deepEqual(sessions, [])
   assert.equal(invalid, 0)
 })
+
+test('沒有任何 session 時不查行程 —— 省一次 spawn', () => {
+  // pgrep 在沒有 codex 在跑時也要 35.7 ms，佔 200ms 契約的 18%。
+  // 沒裝 Codex 的人不該付這筆錢。
+  let queried = 0
+  run({ scan: () => [], liveCwds: () => { queried++; return new Set() } })
+  assert.equal(queried, 0)
+})
+
+test('全部都是舊 session 時也不查行程', () => {
+  // 而且這不只是省成本：一個六天沒動的 session，即使它的 cwd 現在有
+  // codex 在跑，那也是別人的行程 —— 把它標成 running 是錯的。
+  let queried = 0
+  run({
+    scan: () => [file({ rolloutId: 'r1', mtimeMs: NOW - 5 * 3600_000 })],
+    liveCwds: () => { queried++; return new Set(['/p/a']) },
+  })
+  assert.equal(queried, 0)
+})
+
+test('舊 session 不會因為 cwd 現在有 codex 就被說成 running', () => {
+  const { sessions } = run({
+    scan: () => [file({ rolloutId: 'r1', mtimeMs: NOW - 5 * 3600_000 })],
+    liveCwds: () => new Set(['/p/a']),
+  })
+  assert.equal(sessions[0]?.lifecycle, 'crashed', '五小時前的活動不會因為現在有行程就變成執行中')
+})
+
+test('有最近活動的 session 時才查行程', () => {
+  let queried = 0
+  const { sessions } = run({
+    scan: () => [file({ rolloutId: 'r1', mtimeMs: NOW - 60_000 })],
+    liveCwds: () => { queried++; return new Set(['/p/a']) },
+  })
+  assert.equal(queried, 1)
+  assert.equal(sessions[0]?.lifecycle, 'running')
+})

@@ -12,4 +12,12 @@ export interface Board {
   invalid: number
   /** Whether ~/.helm/projects.json was usable, and if not what became of it. */
   prefsHealth: PrefsHealth
+  /**
+   * Data sources that failed outright, one line each.
+   *
+   * An adapter throwing costs the user half their board; showing the
+   * remaining half silently would be the same failure this project keeps
+   * making — reporting success for work that did not happen.
+   */
+  adapterFailures: string[]
 }

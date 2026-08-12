@@ -122,6 +122,7 @@ function ago(ms, nowMs) {
 // 沒有，於是釘選與隱藏靜靜失效而桌面一片健康。
 function notesOf(board) {
   const notes = []
+  for (const f of board.adapterFailures || []) notes.push(f)
   if (board.invalid > 0) notes.push('有 ' + board.invalid + ' 個 session 記錄無法解析')
   if (board.prefsHealth && board.prefsHealth !== 'ok') {
     notes.push('偏好檔無法解析，釘選與隱藏沒有生效')

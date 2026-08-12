@@ -1,6 +1,8 @@
 import { existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { discoverClaudeCode } from '../adapters/claude-code/discover.ts'
+import { defaultCodexDeps, discoverCodex } from '../adapters/codex/discover.ts'
+import { collectFromAdapters } from '../adapters/registry.ts'
 import { queryProcesses, type ProcessProbe } from '../adapters/claude-code/processes.ts'
 import type { Board } from '../board.ts'
 import { resolvePaths, type HelmPaths } from '../paths.ts'
@@ -21,22 +23,41 @@ export function collectStatus(
   probe: ProcessProbe = queryProcesses,
 ): Board {
   const { prefs, health: prefsHealth } = readPrefs(paths.prefsFile)
-  const { sessions, invalid } = discoverClaudeCode(paths, {
-    windowDays: ACTIVITY_WINDOW_DAYS,
-    nowMs,
-    // Pinned projects are exempt from the window (spec §7), so the scan has to
-    // be told about them; filtering them out here would make that exemption
-    // unreachable further down.
-    alwaysInclude: Object.entries(prefs.projects)
-      .filter(([, p]) => p.pinned)
-      .map(([path]) => path),
-  })
-  const probed = probe(sessions.flatMap((d) => (d.pid === null ? [] : [d.pid])))
-  const states = reconcileSessions(sessions, {
-    probe: probed,
-    readLive: (id) => readLiveMarker(paths.helmLive, id),
-    transcriptMtimeMs: mtimeMs,
-  })
+  // Pinned projects are exempt from the window (spec §7), so each scan has to
+  // be told about them; filtering them out afterwards would make that
+  // exemption unreachable.
+  const alwaysInclude = Object.entries(prefs.projects)
+    .filter(([, p]) => p.pinned)
+    .map(([path]) => path)
+
+  const { sessions: states, invalid, failures } = collectFromAdapters([
+    {
+      id: 'claude-code',
+      collect: () => {
+        const found = discoverClaudeCode(paths, { windowDays: ACTIVITY_WINDOW_DAYS, nowMs, alwaysInclude })
+        const probed = probe(found.sessions.flatMap((d) => (d.pid === null ? [] : [d.pid])))
+        return {
+          sessions: reconcileSessions(found.sessions, {
+            probe: probed,
+            readLive: (id) => readLiveMarker(paths.helmLive, id),
+            transcriptMtimeMs: mtimeMs,
+          }),
+          invalid: found.invalid,
+        }
+      },
+    },
+    {
+      id: 'codex',
+      collect: () => discoverCodex({
+        sessionsDir: join(paths.home, '.codex', 'sessions'),
+        cacheFile: join(paths.helmHome, 'codex-meta.json'),
+        windowDays: ACTIVITY_WINDOW_DAYS,
+        nowMs,
+        alwaysInclude,
+      }, defaultCodexDeps(join(paths.helmHome, 'codex-meta.json'))),
+    },
+  ])
+
   const projects = groupIntoProjects(states, {
     prefs,
     nowMs,
@@ -44,7 +65,7 @@ export function collectStatus(
     isGitRepo: (p) => existsSync(join(p, '.git')),
     home: paths.home,
   })
-  return { projects, invalid, prefsHealth }
+  return { projects, invalid, prefsHealth, adapterFailures: failures }
 }
 
 function mtimeMs(path: string): number | null {

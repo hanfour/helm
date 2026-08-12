@@ -25,7 +25,7 @@ const proj = (over: Partial<ProjectView> = {}): ProjectView => {
 }
 
 const board = (projects: ProjectView[], over: Partial<Board> = {}): Board =>
-  ({ projects, invalid: 0, prefsHealth: 'ok' as const, ...over })
+  ({ projects, invalid: 0, prefsHealth: 'ok' as const, adapterFailures: [], ...over })
 
 const title = (out: string) => out.split('\n')[0] ?? ''
 const body = (out: string) => out.slice(out.indexOf('\n---\n'))
@@ -108,7 +108,7 @@ test('註冊表解析失敗時在選單裡明講，不靜默隱藏', () => {
 })
 
 test('偏好檔毀損時也在選單裡明講', () => {
-  assert.match(renderSwiftBar(board([proj()], { prefsHealth: 'quarantined' as const }), OPTS), /偏好檔/)
+  assert.match(renderSwiftBar(board([proj()], { prefsHealth: 'quarantined' as const, adapterFailures: [] }), OPTS), /偏好檔/)
 })
 
 test('pinned 專案顯示釘選記號', () => {
@@ -244,7 +244,7 @@ test('名字被清成空字串時仍有可辨識的標示', () => {
 test('空看板時降級警告仍然顯示 —— 那正是最需要它的時候', () => {
   // prefs 毀損 → 釘選失效 → 靠 pin 豁免 14 天窗口的專案全部消失 →
   // 使用者只看到「沒有符合條件的專案」，一個字都沒提到有東西壞掉。
-  const out = renderSwiftBar(board([], { invalid: 7, prefsHealth: 'quarantined' as const }), OPTS)
+  const out = renderSwiftBar(board([], { invalid: 7, prefsHealth: 'quarantined' as const, adapterFailures: [] }), OPTS)
   assert.match(out, /7 個/)
   assert.match(out, /偏好檔/)
 })

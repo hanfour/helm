@@ -85,7 +85,7 @@ test('沒有 .git 的目錄不會出現', () => {
   )
   assert.deepEqual(
     collectStatus(resolvePaths({ home }), NOW, () => ({ alive: new Map(), unreachable: new Set<number>() })),
-    { projects: [], invalid: 0, prefsHealth: 'ok' as const },
+    { projects: [], invalid: 0, prefsHealth: 'ok' as const, adapterFailures: [] },
   )
 })
 

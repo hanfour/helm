@@ -167,12 +167,24 @@ session_meta 的 payload 有 14 種形狀（2026-04 到 2026-08 的版本演進�
 
 **Interfaces:** Produces `ADAPTERS: readonly AgentAdapter[]`
 
-- [ ] **Step 1：寫失敗測試**——同一個 cwd 底下的 Claude Code 與 Codex session 歸到同一個專案、`invalid` 是各 adapter 的總和、其中一個 adapter 丟例外時另一個仍然出得來（隔離，同 P3 的 install 教訓）、`aggregateStatus` 對混合 session 的優先序
-- [ ] **Step 2：紅**
-- [ ] **Step 3：實作**
-- [ ] **Step 4：綠**
-- [ ] **Step 5：效能驗證**——用行程內部的 `process.uptime()` 量（外部 wall-clock 在這台機器上量不出東西，見 P3 計畫末節），確認 `helm menu` 仍在 200 ms 契約內
-- [ ] **Step 6：commit**
+- [x] **Step 1：寫失敗測試**——同一個 cwd 底下的 Claude Code 與 Codex session 歸到同一個專案、`invalid` 是各 adapter 的總和、其中一個 adapter 丟例外時另一個仍然出得來（隔離，同 P3 的 install 教訓）、`aggregateStatus` 對混合 session 的優先序
+- [x] **Step 2：紅**
+- [x] **Step 3：實作**
+- [x] **Step 4：綠**
+- [x] **Step 5：效能驗證**（行程內部 `process.uptime()`，外部 wall-clock 在這台機器上量不出東西——見 P3 計畫末節）：
+
+```
+P3 末（只有 Claude Code）    89 ms
+P4 後（兩個 adapter）       107 ms（取最小；三次量到 107 / 143 / 149）
+冷快取的第一次              109 ms
+```
+
+多出約 18 ms，來自多掃 192 個 rollout 與載入 4.9 KB 的 meta 快取。加上
+uptime 起算前的 dyld 與 V8 初始化（約 40 ms）約 150 ms，仍在 200 ms 契約內。
+
+`pgrep` 那 35.7 ms **沒有被付出**：目前沒有任何 Codex session 在 30 分鐘的
+活動窗口內，所以行程表根本沒被查——那正是 Task 6 末尾那個優化的用意。
+- [x] **Step 6：commit**
 
 ### Task 8：Resume 與慢速路徑
 

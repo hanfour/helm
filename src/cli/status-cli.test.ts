@@ -22,7 +22,7 @@ test('--json 輸出可解析，且帶著看板的完整結構', () => {
   const board = JSON.parse(r.out) as {
     projects: { name: string; sessions: unknown[] }[]
     invalid: number
-    prefsHealth: string
+    prefsHealth: string, adapterFailures: []
   }
   assert.equal(board.projects[0]?.name, 'proj')
   assert.equal(board.projects[0]?.sessions.length, 1)
