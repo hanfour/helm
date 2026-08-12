@@ -144,3 +144,69 @@ test('沒有 sessions 欄位時不炸掉', () => {
   const activeLive = evalFn(widget(), 'activeLive') as (p: unknown) => unknown
   assert.equal(activeLive({ aggregateStatus: 'busy' }), null)
 })
+
+/** A localStorage stand-in, since the widget's logic block runs outside a browser. */
+function withStorage<T>(seed: Record<string, string>, fn: () => T): T {
+  const store: Record<string, string> = { ...seed }
+  const g = globalThis as { localStorage?: unknown }
+  const had = 'localStorage' in g
+  const previous = g.localStorage
+  g.localStorage = {
+    getItem: (k: string) => store[k] ?? null,
+    setItem: (k: string, v: string) => {
+      store[k] = v
+    },
+  }
+  try {
+    return fn()
+  } finally {
+    if (had) g.localStorage = previous
+    else delete g.localStorage
+  }
+}
+
+const POS_KEY = 'helm.widget.pos'
+
+test('沒存過位置時回到左上角的預設值', () => {
+  const loadPos = evalFn(widget(), 'loadPos') as () => { top: number; left: number }
+  assert.deepEqual(withStorage({}, loadPos), { top: 20, left: 20 })
+})
+
+test('存過的位置讀得回來', () => {
+  const loadPos = evalFn(widget(), 'loadPos') as () => { top: number; left: number }
+  const saved = { top: 300, left: 640 }
+  assert.deepEqual(withStorage({ [POS_KEY]: JSON.stringify(saved) }, loadPos), saved)
+})
+
+test('存的內容壞掉時回預設值，而不是讓整個 widget 消失', () => {
+  // localStorage is shared with anything else served from this origin and
+  // survives every reinstall. A widget that throws here renders nothing at
+  // all, and the user has no obvious way to find out why.
+  const loadPos = evalFn(widget(), 'loadPos') as () => { top: number; left: number }
+  for (const junk of ['not json', 'null', '[]', '{}', '{"top":"20","left":20}', '{"top":null}']) {
+    assert.deepEqual(withStorage({ [POS_KEY]: junk }, loadPos), { top: 20, left: 20 }, junk)
+  }
+})
+
+test('位置被夾在畫面內 —— 拖出去就再也抓不回來了', () => {
+  const clampPos = evalFn(widget(), 'clampPos') as (
+    p: { top: number; left: number }, w: number, h: number,
+  ) => { top: number; left: number }
+  assert.deepEqual(clampPos({ top: -80, left: -200 }, 1000, 800), { top: 0, left: 0 })
+  const far = clampPos({ top: 5000, left: 9000 }, 1000, 800)
+  assert.ok(far.left < 1000 && far.top < 800, JSON.stringify(far))
+  assert.deepEqual(clampPos({ top: 100, left: 200 }, 1000, 800), { top: 100, left: 200 })
+})
+
+test('localStorage 寫不進去時不影響拖曳本身', () => {
+  // Safari-style private mode throws on setItem. Losing the saved position is
+  // acceptable; losing the widget is not.
+  const savePos = evalFn(widget(), 'savePos') as (p: unknown) => void
+  const g = globalThis as { localStorage?: unknown }
+  g.localStorage = { getItem: () => null, setItem: () => { throw new Error('QuotaExceeded') } }
+  try {
+    assert.doesNotThrow(() => savePos({ top: 1, left: 2 }))
+  } finally {
+    delete g.localStorage
+  }
+})

@@ -32,22 +32,96 @@ export const command = ${command}
 
 export const refreshFrequency = 5000
 
+// 外層只當一個不佔位的錨點，實際的卡片由 render 自己定位。
+// 這樣拖曳改的是我們自己的節點，不必去碰 Übersicht 建的容器。
 export const className = \`
-  top: 20px;
-  left: 20px;
-  width: 300px;
+  top: 0;
+  left: 0;
   font-family: -apple-system, "Helvetica Neue", sans-serif;
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.9);
-  background: rgba(20, 22, 26, 0.72);
-  backdrop-filter: blur(20px);
-  border-radius: 12px;
-  padding: 12px 14px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
   line-height: 1.45;
 \`
 
+const CARD = {
+  position: 'fixed',
+  width: '300px',
+  color: 'rgba(255, 255, 255, 0.9)',
+  background: 'rgba(20, 22, 26, 0.72)',
+  backdropFilter: 'blur(20px)',
+  borderRadius: '12px',
+  padding: '12px 14px',
+  boxShadow: '0 4px 20px rgba(0, 0, 0, 0.25)',
+  cursor: 'move',
+  userSelect: 'none',
+}
+
 // --- helm:logic --- 這一段不含 JSX，測試會原封不動地執行它。
+const POS_KEY = 'helm.widget.pos'
+const DEFAULT_POS = { top: 20, left: 20 }
+
+// localStorage 跟這個 origin 的所有東西共用，而且每次重裝都還在。
+// 讀到壞資料就丟例外的話，整個 widget 會什麼都不畫，使用者也無從得知原因。
+function loadPos() {
+  try {
+    const raw = localStorage.getItem(POS_KEY)
+    if (!raw) return DEFAULT_POS
+    const p = JSON.parse(raw)
+    return p && typeof p.top === 'number' && typeof p.left === 'number'
+      ? { top: p.top, left: p.left }
+      : DEFAULT_POS
+  } catch (e) {
+    return DEFAULT_POS
+  }
+}
+
+// 存不進去就算了 —— 私密瀏覽模式的 setItem 會丟例外。
+// 掉一次位置可以接受，掉整個 widget 不行。
+function savePos(pos) {
+  try {
+    localStorage.setItem(POS_KEY, JSON.stringify(pos))
+  } catch (e) {
+    // 位置記不住，但看板照常運作。
+  }
+}
+
+// 拖出畫面外就再也抓不回來了 —— 至少留一角在裡面。
+function clampPos(pos, viewportWidth, viewportHeight) {
+  const edge = 40
+  const maxLeft = Math.max(0, viewportWidth - edge)
+  const maxTop = Math.max(0, viewportHeight - edge)
+  return {
+    top: Math.min(Math.max(0, pos.top), maxTop),
+    left: Math.min(Math.max(0, pos.left), maxLeft),
+  }
+}
+
+let pos = loadPos()
+
+// mousemove/mouseup 掛在 document 上，否則滑鼠一離開卡片就跟丟。
+function startDrag(event) {
+  const node = event.currentTarget
+  const startX = event.clientX
+  const startY = event.clientY
+  const origin = { top: pos.top, left: pos.left }
+  const move = (e) => {
+    pos = clampPos(
+      { top: origin.top + e.clientY - startY, left: origin.left + e.clientX - startX },
+      window.innerWidth,
+      window.innerHeight,
+    )
+    node.style.top = pos.top + 'px'
+    node.style.left = pos.left + 'px'
+  }
+  const up = () => {
+    document.removeEventListener('mousemove', move)
+    document.removeEventListener('mouseup', up)
+    savePos(pos)
+  }
+  document.addEventListener('mousemove', move)
+  document.addEventListener('mouseup', up)
+  event.preventDefault()
+}
+
 // aggregateStatus 的值域就是這四個加 null（見 session-status.ts）。
 // 第一版寫了一個不存在的 'waiting'，而 ended 與 crashed 雙雙掉進預設值 ——
 // 中斷的專案看起來跟閒置的一模一樣。
@@ -120,27 +194,32 @@ function line(p) {
 export const render = ({ output, error }) => {
   // Every failure is drawn. An empty widget cannot be told apart from a quiet
   // machine, and "helm is broken" must never look like "nothing is running".
-  if (error) return <div>⚓ helm 讀不到資料：{String(error)}</div>
+  const card = { ...CARD, top: pos.top + 'px', left: pos.left + 'px' }
+  const shell = (children) => (
+    <div style={card} onMouseDown={startDrag}>{children}</div>
+  )
+
+  if (error) return shell(<div>⚓ helm 讀不到資料：{String(error)}</div>)
 
   let board
   try {
     board = JSON.parse(output)
   } catch (e) {
     const head = String(output || '').slice(0, 120)
-    return <div>⚓ helm 的輸出讀不懂：{head || '（沒有輸出）'}</div>
+    return shell(<div>⚓ helm 的輸出讀不懂：{head || '（沒有輸出）'}</div>)
   }
 
   const projects = board.projects || []
   const title = titleOf(projects)
 
-  return (
+  return shell(
     <div>
       <div style={{ ...row, borderBottom: '1px solid rgba(255,255,255,0.12)', paddingBottom: '6px' }}>
         <span style={{ flex: 1, fontWeight: 600 }}>⚓ helm</span>
         <span style={{ ...dim, color: title.color }}>{title.word}</span>
       </div>
       {projects.length === 0 ? <div style={{ ...dim, marginTop: '6px' }}>沒有找到 session</div> : projects.map(line)}
-    </div>
+    </div>,
   )
 }
 `
