@@ -786,3 +786,18 @@ test('widget 的 fallback 也有 PATH 退路 —— 註解說跟 plugin 相同�
   assert.match(readFileSync(shim, 'utf8'), /^\[ -x "\$NODE" \] \|\| NODE=node$/m, 'shim 要帶退路')
   assert.match(readFileSync(shim, 'utf8'), /--no-warnings/)
 })
+
+test('uninstall 也清掉 widget 用的 shim', () => {
+  const h = home({})
+  const paths = resolvePaths({ home: h })
+  const wrapper = join(h, '.local', 'bin', 'helm')
+  mkdirSync(dirname(wrapper), { recursive: true })
+  writeFileSync(wrapper, '#!/bin/sh\necho "Kubernetes Helm v3.16.2"\n')
+  const deps = { ...DEPS, ubersichtInstalled: true, ubersicht: fakePrefs() }
+  installHook(paths, deps)
+  const shim = join(h, '.helm', 'run-helm.sh')
+  assert.equal(existsSync(shim), true, '前提：別人的 helm 佔住 wrapper 時會建 shim')
+
+  uninstallHook(paths, deps)
+  assert.equal(existsSync(shim), false, 'shim 是 helm 寫的，要清掉')
+})

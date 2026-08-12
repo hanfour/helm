@@ -353,6 +353,9 @@ export function uninstallHook(paths: HelmPaths, deps: InstallDeps): InstallRepor
     // gets cleaned up rather than left running.
     join(paths.home, 'Library', 'Application Support', 'SwiftBar', PLUGIN_NAME),
     join(widgetDir.dir ?? defaultWidgetDir(paths), WIDGET_NAME),
+    // Only written when somebody else's `helm` occupies ~/.local/bin, but it
+    // is helm's file either way and uninstall must not leave it behind.
+    join(paths.helmHome, 'run-helm.sh'),
   ]) {
     if (!isOurScript(path)) continue
     // Written by helm, then edited by the user. Deleting it would throw away

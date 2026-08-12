@@ -43,8 +43,13 @@ function report(result: InstallReport, verb: string): number {
     )
     return 1
   }
+  // The two commands end in opposite states, so they cannot share a closing
+  // line: after uninstall, telling the user how to disable the hook and how to
+  // uninstall is advice about something that is no longer there.
   process.stdout.write(
-    `${verb}完成。隨時可用 HELM_OFF=1 停用 hook，或 helm uninstall 完全移除。\n`,
+    verb === '安裝'
+      ? '安裝完成。隨時可用 HELM_OFF=1 停用 hook，或 helm uninstall 完全移除。\n'
+      : '解除安裝完成。想再裝回來就跑 helm install。\n',
   )
   return 0
 }

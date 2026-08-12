@@ -77,3 +77,15 @@ test('沒裝過就解除安裝回 1 並說明沒事可做', () => {
   assert.equal(r.code, 1)
   assert.match(r.err, /沒有做任何事/)
 })
+
+test('解除安裝的結尾不會叫人再去停用或再解除一次', () => {
+  // The closing line was shared with install: after removing everything it
+  // still suggested `HELM_OFF=1` to disable the hook and `helm uninstall` to
+  // remove it — advice about a state that no longer exists.
+  const home = scaffoldHome([])
+  captureSync(home, () => runInstall([], FAKE))
+  const r = captureSync(home, () => runUninstall([], FAKE))
+  assert.doesNotMatch(r.out, /HELM_OFF/, r.out)
+  assert.doesNotMatch(r.out, /helm uninstall/, r.out)
+  assert.match(r.out, /解除安裝完成/)
+})
