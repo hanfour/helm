@@ -126,7 +126,7 @@ test('busy 的 session 顯示此刻在跑什麼 —— 這正是 hook 存在的�
   const out = renderSwiftBar(board([proj({
     sessions: [sess({
       nativeStatus: 'busy',
-      live: { sessionId: 'x', ts: NOW, toolName: 'Bash', summary: 'npm test' },
+      live: { sessionId: 'x', ts: NOW, toolName: 'Bash', summary: 'npm test', degraded: false },
     })],
   })]), OPTS)
   assert.match(out, /Bash/)
@@ -139,7 +139,7 @@ test('管線字元被過濾掉 —— 它是 SwiftBar 的參數分隔符，會�
   const out = renderSwiftBar(board([proj({
     sessions: [sess({
       nativeStatus: 'busy',
-      live: { sessionId: 'x', ts: NOW, toolName: 'Bash', summary: 'ps aux | grep node' },
+      live: { sessionId: 'x', ts: NOW, toolName: 'Bash', summary: 'ps aux | grep node', degraded: false },
     })],
   })]), OPTS)
   const line = out.split('\n').find((l) => l.includes('grep node')) ?? ''
@@ -159,7 +159,7 @@ test('每一列的參數都接在唯一一個管線字元之後', () => {
     pinned: true,
     sessions: [sess({
       nativeStatus: 'busy',
-      live: { sessionId: 'x', ts: NOW, toolName: 'Bash', summary: 'a | b | c' },
+      live: { sessionId: 'x', ts: NOW, toolName: 'Bash', summary: 'a | b | c', degraded: false },
     })],
   })], { invalid: 1 }), OPTS)
   for (const line of out.split('\n').filter((l) => l !== '' && l !== '---')) {

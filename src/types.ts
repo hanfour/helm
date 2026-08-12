@@ -42,6 +42,13 @@ export interface LiveMarker {
   ts: number
   toolName: string
   summary: string
+  /**
+   * The file was there but its body could not be used. The timestamp still
+   * holds — it comes from the file's mtime — so crash detection is unaffected;
+   * what is lost is *which* tool was running, and with it the right to claim
+   * high confidence.
+   */
+  degraded: boolean
 }
 
 /** A session after lifecycle reconciliation. */

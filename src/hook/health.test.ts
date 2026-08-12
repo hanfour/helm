@@ -38,6 +38,10 @@ function home(): string {
   return h
 }
 
+/** A body the reader accepts, so the sweep is exercised rather than blocked. */
+const marker = (sessionId: string) =>
+  JSON.stringify({ sessionId, ts: 0, toolName: 'Bash', summary: 'x' })
+
 const find = (checks: readonly Check[], name: string) =>
   checks.find((c) => c.name.includes(name))
 
@@ -85,7 +89,7 @@ test('清理掉已正常結束的 session 的 live 檔', () => {
   const h = home()
   const live = join(h, '.helm', 'live')
   mkdirSync(live, { recursive: true })
-  writeFileSync(join(live, 'done.json'), '{}')
+  writeFileSync(join(live, 'done.json'), marker('done'))
   const removed = sweepStaleLive(
     resolvePaths({ home: h }),
     board([sess({ sessionId: 'done', lifecycle: 'ended_clean' })]),
@@ -151,4 +155,45 @@ test('sweepStaleLive 不修改輸入', () => {
   const snapshot = structuredClone(input)
   sweepStaleLive(resolvePaths({ home: home() }), input, NOW)
   assert.deepEqual(input, snapshot)
+})
+
+test('讀不出來的 live 檔即使 session 看起來已結束也不刪 —— 那正是它中斷的證據', () => {
+  // 這是整條鏈的最後一環：內容壞掉 → lifecycle 判 ended_clean（現在是低信心）
+  // → sweep 看到它在 ended 集合裡 → 刪掉。刪掉之後誤判就永久了，
+  // 而磁碟上再也沒有東西可供檢查。
+  const h = home()
+  const live = join(h, '.helm', 'live')
+  mkdirSync(live, { recursive: true })
+  writeFileSync(join(live, 'broken.json'), '{寫到一半')
+  const removed = sweepStaleLive(
+    resolvePaths({ home: h }),
+    board([sess({ sessionId: 'broken', lifecycle: 'ended_clean' })]),
+    NOW,
+  )
+  assert.deepEqual(removed, [])
+  assert.equal(existsSync(join(live, 'broken.json')), true)
+})
+
+test('低信心的 ended_clean 不足以構成刪除的理由', () => {
+  const h = home()
+  const live = join(h, '.helm', 'live')
+  mkdirSync(live, { recursive: true })
+  writeFileSync(join(live, 'maybe.json'), JSON.stringify({ sessionId: 'maybe', ts: 0 }))
+  const removed = sweepStaleLive(
+    resolvePaths({ home: h }),
+    board([sess({ sessionId: 'maybe', lifecycle: 'ended_clean', lifecycleConfidence: 'low' })]),
+    NOW,
+  )
+  assert.deepEqual(removed, [])
+})
+
+test('超過 30 天的壞檔仍然清得掉 —— 不能無限累積', () => {
+  const h = home()
+  const live = join(h, '.helm', 'live')
+  mkdirSync(live, { recursive: true })
+  const f = join(live, 'ancient.json')
+  writeFileSync(f, '{壞掉')
+  const old = (NOW - 31 * DAY) / 1000
+  utimesSync(f, old, old)
+  assert.deepEqual(sweepStaleLive(resolvePaths({ home: h }), board(), NOW), ['ancient.json'])
 })

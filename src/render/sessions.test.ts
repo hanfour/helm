@@ -59,7 +59,7 @@ test('busy 時顯示 live marker 的工具與摘要', () => {
   const out = renderSessions(proj({
     sessions: [sess({
       nativeStatus: 'busy',
-      live: { sessionId: 'x', ts: NOW, toolName: 'Bash', summary: 'npm test' },
+      live: { sessionId: 'x', ts: NOW, toolName: 'Bash', summary: 'npm test', degraded: false },
     })],
   }), opts)
   assert.match(out, /Bash/)
@@ -70,7 +70,7 @@ test('idle 時忽略過時的 live marker', () => {
   const out = renderSessions(proj({
     sessions: [sess({
       nativeStatus: 'idle',
-      live: { sessionId: 'x', ts: NOW, toolName: 'Bash', summary: 'npm test' },
+      live: { sessionId: 'x', ts: NOW, toolName: 'Bash', summary: 'npm test', degraded: false },
     })],
   }), opts)
   assert.ok(!out.includes('npm test'))

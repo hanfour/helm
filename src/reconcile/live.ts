@@ -13,9 +13,16 @@ const LiveSchema = z.object({
 }).passthrough()
 
 /**
- * Written by the PreToolUse hook, one line, overwritten each call.
+ * Written by the PreToolUse hook, one line, replaced atomically each call.
  * helm owns this file — Claude Code never touches it — so it survives
  * upstream cleaning of the session registry (spec §4.3).
+ *
+ * Null means the file is genuinely absent. A file that exists but cannot be
+ * parsed comes back as a `degraded` marker instead, never as null: collapsing
+ * the two made lifecycle report `ended_clean` at high confidence for exactly
+ * the session that had been killed mid-write, and `helm doctor` then deleted
+ * the evidence. The timestamp survives regardless because it is the file's
+ * mtime, so the §6 comparison against the transcript still works.
  */
 export function readLiveMarker(liveDir: string, sessionId: string): LiveMarker | null {
   // Session ids come from parsed files, but they end up in a path, so treat
@@ -23,25 +30,43 @@ export function readLiveMarker(liveDir: string, sessionId: string): LiveMarker |
   if (sessionId.includes('/') || sessionId.includes('\\') || sessionId.includes('..')) {
     return null
   }
+  const file = join(liveDir, `${sessionId}.json`)
+  // The hook writes `ts: 0`; the kernel's mtime is the same instant with
+  // better precision, and it is readable even when the body is not.
+  const ts = mtimeOf(file)
+  if (ts === null) return null
+
+  const body = parseBody(file)
+  if (body === null || body.sessionId !== sessionId) {
+    return { sessionId, ts, toolName: '', summary: '', degraded: true }
+  }
+  return {
+    sessionId,
+    ts,
+    toolName: body.toolName,
+    summary: body.summary.slice(0, MAX_SUMMARY),
+    degraded: false,
+  }
+}
+
+/** Null distinguishes "no such file" from every other outcome. */
+function mtimeOf(file: string): number | null {
   try {
-    const file = join(liveDir, `${sessionId}.json`)
-    const raw = readFileSync(file, 'utf8')
-    const parsed = LiveSchema.safeParse(JSON.parse(raw))
-    if (!parsed.success) return null
-    const d = parsed.data
-    return {
-      sessionId: d.sessionId,
-      // The hook writes 0: POSIX sh has no builtin for the epoch, and adding
-      // `date` would double the spawn cost of every tool call. The file's own
-      // mtime is the same instant, measured by the kernel.
-      ts: statSync(file).mtimeMs,
-      toolName: d.toolName,
-      summary: d.summary.slice(0, MAX_SUMMARY),
-    }
+    return statSync(file).mtimeMs
   } catch {
-    // File read or JSON parse failed; treating this as "no live marker"
-    // is correct because the marker is owned by helm and was written
-    // correctly when it existed.
+    // Absent or unreachable. Absent is the overwhelmingly common case and the
+    // only one where "there is no marker" is the honest answer.
+    return null
+  }
+}
+
+function parseBody(file: string): { sessionId: string; toolName: string; summary: string } | null {
+  try {
+    const parsed = LiveSchema.safeParse(JSON.parse(readFileSync(file, 'utf8')))
+    return parsed.success ? parsed.data : null
+  } catch {
+    // Truncated, empty, or not JSON. The caller degrades rather than pretends
+    // the file was never there.
     return null
   }
 }

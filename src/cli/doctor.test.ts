@@ -1,6 +1,6 @@
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { runDoctor } from './doctor.ts'
 import { runInstall } from './install.ts'
@@ -50,8 +50,13 @@ test('偏好檔毀損時回報，並說明原檔沒被丟掉', () => {
 test('順手清掉已結束 session 的 live 檔，並回報清了幾個', () => {
   const home = scaffoldHome([{ project: 'proj', sessions: [{ id: 'aaaa1111-0000-1111-2222-333344445555' }] }])
   captureSync(home, () => runInstall([]))
-  const stale = join(home, '.helm', 'live', 'aaaa1111-0000-1111-2222-333344445555.json')
-  writeFileSync(stale, '{}')
+  const id = 'aaaa1111-0000-1111-2222-333344445555'
+  const stale = join(home, '.helm', 'live', `${id}.json`)
+  writeFileSync(stale, JSON.stringify({ sessionId: id, ts: 0, toolName: 'Bash', summary: 'x' }))
+  // 必須比 transcript 舊。marker 比 transcript 新代表「最後一個工具呼叫沒能
+  // 寫回結果」，那是當機的形狀（規格 §6），當機的證據不該被清掉。
+  const old = (Date.now() - 3600_000) / 1000
+  utimesSync(stale, old, old)
   const r = captureSync(home, () => runDoctor([]))
   assert.match(r.out, /順手清掉 1 個/)
   assert.equal(existsSync(stale), false)

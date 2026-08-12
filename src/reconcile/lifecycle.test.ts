@@ -9,7 +9,7 @@ const PS_MATCHING = fmtLocal(new Date(Date.UTC(2026, 7, 6, 6, 16, 12)))
 const PS_OTHER = fmtLocal(new Date(Date.UTC(2026, 7, 6, 9, 30, 0)))
 
 const marker = (ts: number): LiveMarker =>
-  ({ sessionId: 's', ts, toolName: 'Bash', summary: 'git status' })
+  ({ sessionId: 's', ts, toolName: 'Bash', summary: 'git status', degraded: false })
 
 test('註冊表在、但根本問不到 PID 的狀態 → 低信心，不當成死亡證據', () => {
   // ps 整個掛掉時，每一個 session 都會走到這裡。若判成高信心 crashed，
@@ -138,4 +138,22 @@ test('psLstart 格式有效但時刻不同 → crashed/high（真的 PID 重用�
     procStart: PROC_START, live: null, transcriptMtimeMs: null,
   })
   assert.deepEqual(r, { lifecycle: 'crashed', confidence: 'high' })
+})
+
+test('壞掉的 live marker 晚於 transcript → 仍判 crashed，但信心降為 low', () => {
+  // 時間戳來自檔案 mtime，所以內容壞掉不影響「晚於 transcript」這個判斷；
+  // 但我們不知道它當時卡在哪個工具，所以不該宣稱高信心。
+  const r = decideLifecycle({
+    registryFileExists: false, pidAlive: false, pidUnknown: false, psLstart: null,
+    procStart: null, live: { ...marker(5000), degraded: true }, transcriptMtimeMs: 4000,
+  })
+  assert.deepEqual(r, { lifecycle: 'crashed', confidence: 'low' })
+})
+
+test('壞掉的 live marker 早於 transcript → ended_clean 但信心降為 low', () => {
+  const r = decideLifecycle({
+    registryFileExists: false, pidAlive: false, pidUnknown: false, psLstart: null,
+    procStart: null, live: { ...marker(3000), degraded: true }, transcriptMtimeMs: 4000,
+  })
+  assert.deepEqual(r, { lifecycle: 'ended_clean', confidence: 'low' })
 })

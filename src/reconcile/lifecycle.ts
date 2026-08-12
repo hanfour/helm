@@ -63,9 +63,14 @@ function fromAbsence(input: LifecycleInput): LifecycleVerdict {
     // A marker with nothing to compare against proves nothing either way.
     return { lifecycle: 'ended_clean', confidence: 'low' }
   }
+  // A degraded marker still carries a trustworthy timestamp (it is the file's
+  // mtime), so the comparison itself is sound. What it cannot tell us is which
+  // tool was running, and a verdict we cannot explain does not get to call
+  // itself high confidence.
+  const confidence: Confidence = input.live.degraded ? 'low' : 'high'
   return input.live.ts > input.transcriptMtimeMs
-    ? { lifecycle: 'crashed', confidence: 'high' }
-    : { lifecycle: 'ended_clean', confidence: 'high' }
+    ? { lifecycle: 'crashed', confidence }
+    : { lifecycle: 'ended_clean', confidence }
 }
 
 export interface ReconcileDeps {

@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import type { Board } from '../board.ts'
 import type { HelmPaths } from '../paths.ts'
 import { quarantinePath } from '../projects/prefs.ts'
+import { readLiveMarker } from '../reconcile/live.ts'
 import { hasHelmHook } from './settings.ts'
 
 const ORPHAN_MAX_AGE_MS = 30 * 86_400_000
@@ -120,16 +121,23 @@ function swiftbar(paths: HelmPaths): Check {
  * noticing — the exact failure this whole board exists to prevent.
  */
 export function sweepStaleLive(paths: HelmPaths, board: Board, nowMs: number): string[] {
+  // High confidence only. A `low` verdict means helm could not actually tell
+  // how the session ended, and deleting on a guess makes the guess permanent.
   const ended = new Set(
     board.projects
       .flatMap((p) => p.sessions)
-      .filter((s) => s.lifecycle === 'ended_clean')
+      .filter((s) => s.lifecycle === 'ended_clean' && s.lifecycleConfidence === 'high')
       .map((s) => s.sessionId),
   )
   return listJson(paths.helmLive).flatMap((name) => {
     const file = join(paths.helmLive, name)
     const sessionId = name.slice(0, -'.json'.length)
-    if (!ended.has(sessionId) && ageOf(file, nowMs) <= ORPHAN_MAX_AGE_MS) return []
+    const expired = ageOf(file, nowMs) > ORPHAN_MAX_AGE_MS
+    // A marker helm cannot read is never deleted on the strength of a verdict
+    // that was reached *because* it could not be read. Only sheer age clears
+    // it, which still bounds how many can pile up.
+    const readable = readLiveMarker(paths.helmLive, sessionId)?.degraded === false
+    if (!expired && !(readable && ended.has(sessionId))) return []
     return removeQuietly(file) ? [name] : []
   })
 }
