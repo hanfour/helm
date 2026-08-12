@@ -90,9 +90,17 @@ Unknown JSON field: "reviewDecision"
 
 ### Task 2：`gh` 的兩個查詢與四種降級
 
-- [ ] 測試（注入假的 exec）：`gh` 不存在、未登入（exit 4）、rate limit、`--json` 欄位不支援、輸出不是 JSON
-- [ ] 四種降級各自產生一句**帶下一步**的訊息，而不是一個空陣列
-- [ ] 紅 → 實作 → 綠 → commit
+- [x] 測試（注入假的 exec）：`gh` 不存在、未登入（exit 4）、rate limit、`--json` 欄位不支援、輸出不是 JSON
+- [x] 四種降級各自產生一句**帶下一步**的訊息，而不是一個空陣列
+- [x] 紅 → 實作 → 綠 → commit
+- [x] **真實 `gh` 端到端**：`searchMyPrs` 806 ms → 1 個 PR；`prDetail` 889 ms → 判定「等 CI」。三種降級各自用真的失敗觸發過
+
+**實測補上的第五種降級**：憑證失效（HTTP 401）跟「沒登入」（exit 4）要
+分開講——前者要重新登入，後者是從沒登入過，使用者要做的事不一樣。
+規格 §10 把它們算成同一種。
+
+認不得的失敗**照原樣把 stderr 的第一行說出來**。helm 沒見過的訊息，
+正是使用者最需要逐字讀到的那一則。
 
 ### Task 3：60 秒快取與 stale-while-revalidate
 
