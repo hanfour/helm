@@ -38,7 +38,12 @@ export function buildWidget(argv: readonly string[]): string {
 
 export const command = ${command}
 
-export const refreshFrequency = 5000
+// 10 秒，不是選單列的 5 秒。Übersicht 把這個值同時當成 HTTP 逾時
+// （client.js 的 runShellCommand(...).timeout(refreshFrequency)），
+// 而 helm status --json 在本機實測 p50 407ms、機器忙起來 p90 2.4 秒、
+// 最差 7.2 秒 —— 用 5 秒的話，桌面會不定時整片變成逾時錯誤。
+// 看板本來就是掃一眼的東西，10 秒的新鮮度綽綽有餘。
+export const refreshFrequency = 10000
 
 // 外層只當一個不佔位的錨點，實際的卡片由 render 自己定位。
 // 這樣拖曳改的是我們自己的節點，不必去碰 Übersicht 建的容器。

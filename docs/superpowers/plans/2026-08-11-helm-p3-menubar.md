@@ -2359,3 +2359,43 @@ $ env -i HOME="$HOME" PATH="/usr/bin:/bin:/usr/sbin:/sbin" ~/SwiftBar/helm.5s.sh
 
 `health.ts` 的兩個 GUI app 檢查也改成可注入。原本讀 `/Applications`，
 等於斷言結果取決於跑測試的機器 —— 在沒裝那個 app 的機器上，那些斷言什麼都沒驗。
+
+---
+
+## 效能契約的現況（2026-08-12 量測，未達標）
+
+契約是 `helm menu` 200ms。**目前實測 422ms，超過一倍。**
+
+從 shell 量，每項連跑 10 次取平均（不要從 Node 行程 spawn，那會得到膨脹
+3 倍的假數字；也不要用 `python3` 包時間戳，它自己的啟動成本會混進來）：
+
+```
+node -e ''         48 ms   ← Node 自身下限
+helm help          81 ms   ← 純 module 載入，與 2026-08-12 的紀錄一致
+helm menu         422 ms
+helm status --json 407 ms
+```
+
+**多出來的成本不是這一輪引入的，是資料量長大了。** `helm help` 仍然是
+81ms，所以啟動路徑沒有退化。本機 `~/.claude/projects` 現在是 1.5 GB、
+2,898 個 jsonl、177 個 session。
+
+CPU profile 顯示 168ms 的 CPU 時間，沒有單一熱點：
+
+```
+21.9 ms  (program)
+16.8 ms  __require
+14.2 ms  Module
+13.0 ms  child_process:spawnSync     ← ps
+ 7.5 ms  compileSourceTextModule
+ 5.3 ms  readdir
+```
+
+其餘約 250ms 是 I/O 等待。也就是說要達標得同時處理 module 載入、`ps`、
+與檔案掃描三件事 —— 那是一塊獨立的重構，不該混在 review 修正裡。
+
+**現在做的是止血，不是達標：** 桌面 widget 的 `refreshFrequency` 從 5 秒
+改成 10 秒。Übersicht 把這個值**同時當成 HTTP 逾時**
+（`client.js` 的 `runShellCommand(...).timeout(refreshFrequency)`），而
+`status --json` 在機器忙時 p90 是 2.4 秒、最差 7.2 秒 —— 用 5 秒的話桌面
+會不定時整片變成逾時錯誤訊息。選單列維持 5 秒，它沒有這個限制。

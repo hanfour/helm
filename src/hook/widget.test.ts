@@ -47,8 +47,13 @@ function extractCommand(widgetSource: string): string {
   return JSON.parse(m[1]) as string
 }
 
-test('重新整理頻率是 5 秒，跟選單列一致', () => {
-  assert.match(widget(), /refreshFrequency = 5000/)
+test('重新整理頻率留有逾時餘裕 —— Übersicht 拿它當 HTTP timeout', () => {
+  // `.timeout(refreshFrequency)` in Übersicht's client. helm status --json
+  // measures p50 407ms and p90 2.4s on a busy machine, so a 5s value turns
+  // the desktop into an intermittent timeout error.
+  const m = /refreshFrequency = (\d+)/.exec(widget())
+  assert.ok(m?.[1], widget().slice(0, 200))
+  assert.ok(Number(m[1]) >= 10000, `${m[1]}ms 對 p90 2.4 秒來說太緊`)
 })
 
 /**
