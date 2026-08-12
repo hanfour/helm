@@ -28,23 +28,40 @@ type Settings = Record<string, unknown>
 const DESCRIPTION = 'helm —— 記錄此刻正在執行的工具'
 
 /**
+ * What `addHelmHook` did, said out loud.
+ *
+ * "Nothing changed" has two causes and only one is a problem: an unfamiliar
+ * shape (refuse) versus the identical hook already being installed (fine, and
+ * the common case for a repeat install). Inferring the difference afterwards
+ * from `hasHelmHook` got it wrong in exactly one combination — hook present
+ * *and* an unfamiliar neighbour — where install reported success having
+ * changed nothing, leaving the command pointing at a moved repo.
+ */
+export type AddHookResult =
+  | { kind: 'updated'; settings: Settings }
+  | { kind: 'unchanged'; settings: Settings }
+  | { kind: 'refused'; reason: string }
+
+/**
  * Adds exactly one entry, and never rewrites the file wholesale. This is the
  * user's own configuration, already carrying a plugin's worth of setup; the
  * only acceptable footprint is one entry that `removeHelmHook` can take back
  * out again leaving no trace.
  *
- * Returns the input unchanged when `hooks.PreToolUse` is not the shape we
- * understand — writing into something we cannot parse would destroy
- * configuration the user maintains by hand.
+ * Refuses when `hooks.PreToolUse` is not the shape we understand — writing
+ * into something we cannot parse would destroy configuration the user
+ * maintains by hand.
  */
-export function addHelmHook(settings: unknown, command: string): Settings {
+export function addHelmHook(settings: unknown, command: string): AddHookResult {
   const base = asRecord(settings)
   const hooks = base['hooks'] === undefined ? {} : base['hooks']
-  if (!isRecord(hooks)) return base
+  if (!isRecord(hooks)) return { kind: 'refused', reason: 'hooks 不是物件' }
   const existing = hooks['PreToolUse'] === undefined ? [] : hooks['PreToolUse']
-  if (!PreToolUseSchema.safeParse(existing).success) return base
+  if (!PreToolUseSchema.safeParse(existing).success) {
+    return { kind: 'refused', reason: 'hooks.PreToolUse 不是預期的形狀' }
+  }
 
-  return {
+  const next: Settings = {
     ...base,
     hooks: {
       ...hooks,
@@ -64,6 +81,9 @@ export function addHelmHook(settings: unknown, command: string): Settings {
       ],
     },
   }
+  return JSON.stringify(next) === JSON.stringify(base)
+    ? { kind: 'unchanged', settings: base }
+    : { kind: 'updated', settings: next }
 }
 
 /**
@@ -79,6 +99,10 @@ export function removeHelmHook(settings: unknown): Settings {
   const base = asRecord(settings)
   const hooks = base['hooks']
   if (!isRecord(hooks)) return base
+  // Nothing of ours to take out means nothing to tidy up either. The pruning
+  // below removes event arrays that end up empty, which is right when helm
+  // emptied them and wrong when the user's own `hooks: {}` was already there.
+  if (!hasHelmHook(base)) return base
 
   const nextHooks = Object.fromEntries(
     Object.entries(hooks).flatMap(([event, groups]) => {

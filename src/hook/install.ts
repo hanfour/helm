@@ -1,6 +1,6 @@
 import {
-  chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync,
-  writeFileSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync,
+  statSync, writeFileSync,
 } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import type { HelmPaths } from '../paths.ts'
@@ -66,28 +66,21 @@ export function installHook(paths: HelmPaths, deps: InstallDeps): InstallReport 
     }
   }
 
-  const command = buildHookCommand(paths.helmLive, paths.hookErrorsLog)
-  const updated = addHelmHook(settings, command)
-  // `addHelmHook` returns its input untouched when the shape is unfamiliar.
-  // "Nothing changed" therefore has two causes, and only one of them is a
-  // problem: an unfamiliar shape (refuse) versus an identical hook already
-  // being installed (fine, and the common case for a repeat install).
-  // `hasHelmHook(updated)` alone cannot tell them apart, which is how a
-  // re-install meant to fix a moved repo path used to report success while
-  // changing nothing at all.
-  const unchanged = JSON.stringify(updated) === JSON.stringify(settings)
-  if (unchanged && !hasHelmHook(settings)) {
+  const nodeBin = deps.nodeBin ?? process.execPath
+  const command = buildHookCommand(paths.helmLive, paths.hookErrorsLog, undefined, nodeBin)
+  const result = addHelmHook(settings, command)
+  if (result.kind === 'refused') {
     return {
       steps: [],
       ok: false,
-      warnings: [`${paths.claudeSettings} 的 hooks.PreToolUse 不是預期的形狀，已中止安裝，原檔未動。`],
+      warnings: [`${paths.claudeSettings} 的 ${result.reason}，已中止安裝，原檔未動。`],
     }
   }
 
   const steps: string[] = []
   const warnings: string[] = []
   try {
-    apply(paths, deps, updated, steps, warnings)
+    apply(paths, deps, result, steps, warnings, nodeBin)
   } catch (err) {
     // The machine may already have been changed by the time we get here.
     // Reporting only the exception would leave the user believing nothing
@@ -103,9 +96,10 @@ export function installHook(paths: HelmPaths, deps: InstallDeps): InstallReport 
 function apply(
   paths: HelmPaths,
   deps: InstallDeps,
-  updated: unknown,
+  result: { kind: 'updated' | 'unchanged'; settings: unknown },
   steps: string[],
   warnings: string[],
+  nodeBin: string,
 ): void {
   // Only the state before helm ever touched the file is worth keeping. A
   // second backup would capture settings.json *with* the hook already in it,
@@ -125,15 +119,22 @@ function apply(
   mkdirSync(paths.helmLive, { recursive: true })
   steps.push(`已建立 ${paths.helmLive}`)
 
-  writeJsonAtomic(paths.claudeSettings, updated)
-  steps.push(`已把 hook 加進 ${paths.claudeSettings}（其餘設定未動）`)
+  if (result.kind === 'updated') {
+    writeJsonAtomic(paths.claudeSettings, result.settings)
+    steps.push(`已把 hook 加進 ${paths.claudeSettings}（其餘設定未動）`)
+  } else {
+    // Saying "added the hook" here would be a lie, and this is the one command
+    // that edits a file helm does not own — the user has to be able to trust
+    // every line of its output.
+    steps.push(`${paths.claudeSettings} 的 hook 已經是最新的，未改動`)
+  }
 
   const entryRaw = join(deps.repoRoot, 'src/cli/main.ts')
   const entry = shellQuote(entryRaw)
-  const nodeBin = deps.nodeBin ?? process.execPath
   const wrapper = wrapperPath(paths)
   const wrapperOk = writeOurScript(wrapper, `#!/bin/sh\n${nodeInvocation(nodeBin)}\nexec "$NODE" ${entry} "$@"\n`)
   if (wrapperOk) steps.push(`已安裝 ${wrapper}`)
+  else if (isSymlink(wrapper)) warnings.push(refusedSymlink(wrapper))
   else warnings.push(`${wrapper} 已經存在且不是 helm 寫的（Kubernetes 的 helm 也叫這個名字），未覆寫。想用 helm 指令請自行改名或換一個位置。`)
 
   installPlugin(paths, deps, { wrapper, wrapperOk, entryRaw, nodeBin }, steps, warnings)
@@ -186,7 +187,7 @@ function installPlugin(
   if (writeOurScript(plugin, body)) {
     steps.push(`已安裝 SwiftBar plugin：${plugin}`)
   } else {
-    warnings.push(`${plugin} 已經存在且不是 helm 寫的，未覆寫。`)
+    warnings.push(refusal(plugin))
   }
   // Writing this before SwiftBar's first launch skips its folder picker —
   // a manual, GUI-only step helm cannot perform, and one that hides the
@@ -228,7 +229,7 @@ function installWidget(
   if (writeOurFile(widget, `${buildWidget(argv)}`, 0o644)) {
     steps.push(`已安裝桌面 widget：${widget}`)
   } else {
-    warnings.push(`${widget} 已經存在且不是 helm 寫的，未覆寫。`)
+    warnings.push(refusal(widget))
   }
   if (scan.adoptable) {
     adoptWidgetDir(scan.dir, ubersicht)
@@ -318,6 +319,11 @@ function writeOurScript(path: string, body: string): boolean {
 }
 
 function writeOurFile(path: string, body: string, mode: number): boolean {
+  // `lstat`, not `existsSync`: the latter follows links, so a dangling symlink
+  // looked like "nothing here" and helm wrote *through* it into whatever the
+  // link pointed at — reporting the link's path as installed, and later
+  // removing only the link and orphaning the file it had created.
+  if (isSymlink(path)) return false
   if (existsSync(path) && !isOurScript(path)) return false
   mkdirSync(dirname(path), { recursive: true })
   writeFileSync(path, body, 'utf8')
@@ -332,7 +338,29 @@ function writeOurFile(path: string, body: string, mode: number): boolean {
  * just the bare word — is what keeps a third-party file that merely mentions
  * helm from being deleted by uninstall.
  */
+/** Says which of the two reasons applied, because they need different fixes. */
+function refusal(path: string): string {
+  return isSymlink(path)
+    ? refusedSymlink(path)
+    : `${path} 已經存在且不是 helm 寫的，未覆寫。`
+}
+
+function refusedSymlink(path: string): string {
+  return `${path} 是一個 symlink，helm 不會沿著它寫 —— 那會把檔案放到宣告以外的地方，`
+    + '而解除安裝時只刪得掉連結本身。請自行移走它再跑一次 helm install。'
+}
+
+function isSymlink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink()
+  } catch {
+    // Not there at all, which is the normal case for a fresh install.
+    return false
+  }
+}
+
 function isOurScript(path: string): boolean {
+  if (isSymlink(path)) return false
   try {
     const body = readFileSync(path, 'utf8')
     return body.includes(SCRIPT_MARKER) || body.includes(WIDGET_COMMENT)
@@ -364,9 +392,23 @@ function readSettings(file: string): unknown {
     : UNREADABLE
 }
 
-/** settings.json may hold tokens under `env`; a backup of it deserves the same. */
+/**
+ * settings.json may hold tokens under `env`; a backup of it deserves the same
+ * mode, and the same temp-then-rename that the original write gets.
+ *
+ * A half-written backup carries exactly the same filename format as a good
+ * one, so restoring "the earliest backup" after a problem would hand the user
+ * truncated JSON — and nothing in helm checks a backup's integrity.
+ */
 function writeBackup(path: string, body: string): void {
-  writeFileSync(path, body, { encoding: 'utf8', mode: 0o600 })
+  const temp = `${path}.${process.pid}.tmp`
+  try {
+    writeFileSync(temp, body, { encoding: 'utf8', mode: 0o600 })
+    renameSync(temp, path)
+  } catch (err) {
+    rmSync(temp, { force: true })
+    throw err
+  }
 }
 
 /**
@@ -388,10 +430,22 @@ function writeJsonAtomic(file: string, value: unknown): void {
   const target = realPathOf(file)
   const indent = indentOf(target)
   const temp = `${target}.${process.pid}.tmp`
-  writeFileSync(temp, `${JSON.stringify(value, null, indent)}\n`, 'utf8')
-  const mode = modeOf(target)
-  if (mode !== null) chmodSync(temp, mode)
-  renameSync(temp, target)
+  // The mode goes on at creation, not afterwards. settings.json can hold an
+  // API token under `env`; writing it 0644 and chmod-ing later leaves a window
+  // — at a completely predictable filename — where anything else on the
+  // machine can read it. A new file gets 0600 for the same reason.
+  const mode = modeOf(target) ?? 0o600
+  try {
+    writeFileSync(temp, `${JSON.stringify(value, null, indent)}\n`, { encoding: 'utf8', mode })
+    // `mode` is masked by umask on creation, so set it explicitly as well.
+    chmodSync(temp, mode)
+    renameSync(temp, target)
+  } catch (err) {
+    // Otherwise a full disk leaves a readable copy of the user's tokens lying
+    // in ~/.claude for good, and one more with every retry.
+    rmSync(temp, { force: true })
+    throw err
+  }
 }
 
 function realPathOf(file: string): string {

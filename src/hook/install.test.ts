@@ -459,3 +459,104 @@ test('widget 已存在且不是 helm 寫的就不覆寫', () => {
   assert.match(readFileSync(join(dir, 'helm.jsx'), 'utf8'), /my own thing/)
   assert.ok(report.warnings.some((w) => w.includes('helm.jsx')), report.warnings.join('\n'))
 })
+
+test('hook 已經裝過、但 PreToolUse 裡有看不懂的項目時，不得宣稱成功', () => {
+  // The guard was `unchanged && !hasHelmHook`, so this half went unprotected:
+  // helm's own hook is present, `addHelmHook` refuses because of the unfamiliar
+  // neighbour and returns the input untouched, and install reports
+  // 「已把 hook 加進…」「安裝完成」while the command still points at the old
+  // repo and a node binary that has been deleted. `{type:'prompt'}` is a real
+  // shape — settings.ts's own comment says so.
+  const h = home({})
+  installHook(resolvePaths({ home: h }), DEPS)
+  const settings = readSettings(h) as { hooks: { PreToolUse: unknown[] } }
+  settings.hooks.PreToolUse.push({ matcher: '*', hooks: [{ type: 'prompt', prompt: 'hi' }] })
+  writeFileSync(join(h, '.claude', 'settings.json'), JSON.stringify(settings, null, 2))
+
+  const report = installHook(resolvePaths({ home: h }), { ...DEPS, repoRoot: '/moved' })
+  assert.equal(report.ok, false, report.steps.join('\n'))
+  assert.ok(
+    !report.steps.some((s) => s.includes('hook 加進')),
+    `沒改到卻說改了：${report.steps.join('\n')}`,
+  )
+  assert.ok(report.warnings.some((w) => w.includes('PreToolUse')), report.warnings.join('\n'))
+})
+
+test('重複安裝仍然算成功 —— 那是修好路徑的正常做法', () => {
+  const h = home({})
+  installHook(resolvePaths({ home: h }), DEPS)
+  const report = installHook(resolvePaths({ home: h }), DEPS)
+  assert.equal(report.ok, true, report.warnings.join('\n'))
+  assert.ok(!report.warnings.some((w) => w.includes('形狀')), report.warnings.join('\n'))
+})
+
+test('hook 指令用注入的 nodeBin —— 不然那條測試什麼都沒驗', () => {
+  // install.ts called buildHookCommand without deps.nodeBin, so the hook was
+  // the one artefact whose interpreter could not be overridden, and every
+  // assertion about it was testing process.execPath instead.
+  const h = home({})
+  installHook(resolvePaths({ home: h }), { ...DEPS, nodeBin: '/abs/injected/node' })
+  const settings = readSettings(h) as { hooks: { PreToolUse: { hooks: { command: string }[] }[] } }
+  const command = settings.hooks.PreToolUse[0]?.hooks[0]?.command ?? ''
+  assert.ok(command.includes("'/abs/injected/node'"), command)
+})
+
+test('settings.json 的暫存檔從一開始就是原檔的權限，不是先 0644 再改', () => {
+  // The file can hold an API token under `env`. Writing it world-readable and
+  // chmod-ing afterwards leaves a window — and a predictable filename — for
+  // anything else on the machine, and a failed write leaves that copy behind
+  // for good.
+  const h = home({ theme: 'dark' })
+  const file = join(h, '.claude', 'settings.json')
+  chmodSync(file, 0o600)
+  installHook(resolvePaths({ home: h }), DEPS)
+  assert.equal(statSync(file).mode & 0o777, 0o600, '寫完之後權限要保住')
+  assert.deepEqual(
+    readdirSync(join(h, '.claude')).filter((n) => n.includes('.tmp')),
+    [],
+    '不留暫存檔',
+  )
+})
+
+test('新建的 settings.json 不是 world-readable —— 它可能會被放進 token', () => {
+  const h = home()
+  installHook(resolvePaths({ home: h }), DEPS)
+  const mode = statSync(join(h, '.claude', 'settings.json')).mode & 0o777
+  assert.equal(mode & 0o077, 0, `其他人不該讀得到：${mode.toString(8)}`)
+})
+
+test('備份是原子的 —— 半個備份看起來跟完整備份一模一樣', () => {
+  // `settings.json` gets temp+rename; the backup did not. A truncated backup
+  // carries the same filename format, so restoring "the earliest one" after a
+  // problem hands the user broken JSON.
+  const h = home({ theme: 'dark', permissions: { allow: ['Bash(ls)'] } })
+  installHook(resolvePaths({ home: h }), DEPS)
+  const dir = join(h, '.helm', 'backups')
+  assert.deepEqual(readdirSync(dir).filter((n) => n.includes('.tmp')), [], '不留暫存檔')
+  for (const name of readdirSync(dir)) {
+    assert.doesNotThrow(
+      () => JSON.parse(readFileSync(join(dir, name), 'utf8')),
+      `${name} 應該是完整的 JSON`,
+    )
+  }
+})
+
+test('目標是 symlink 時不寫也不刪 —— 那會寫到宣告範圍之外', () => {
+  // `existsSync` follows links, so a dangling symlink looked like "nothing
+  // here": helm wrote through it into the user's own project directory while
+  // reporting it had installed ~/.local/bin/helm, and uninstall removed only
+  // the link, orphaning the file.
+  const h = home({})
+  const wrapper = join(h, '.local', 'bin', 'helm')
+  const target = join(h, 'elsewhere', 'helm')
+  mkdirSync(dirname(wrapper), { recursive: true })
+  mkdirSync(dirname(target), { recursive: true })
+  symlinkSync(target, wrapper)
+
+  const report = installHook(resolvePaths({ home: h }), DEPS)
+  assert.equal(existsSync(target), false, '不該沿著 symlink 寫到別的地方')
+  assert.ok(
+    report.warnings.some((w) => w.includes(wrapper)),
+    `要說出來：${report.warnings.join('\n')}`,
+  )
+})
