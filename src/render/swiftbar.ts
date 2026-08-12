@@ -36,9 +36,8 @@ const TITLE: Record<Exclude<StatusKey, 'ended'>, { word: string; color: string }
  * whenever anything is crashed.
  */
 export function renderSwiftBar(board: Board, opts: MenuOptions): string {
-  const sessions = board.projects.flatMap((p) => p.sessions)
   return `${[
-    renderTitle(sessions),
+    renderTitle(board.projects),
     '---',
     ...renderBody(board, opts),
     '---',
@@ -47,8 +46,16 @@ export function renderSwiftBar(board: Board, opts: MenuOptions): string {
   ].join('\n')}\n`
 }
 
-function renderTitle(sessions: readonly SessionState[]): string {
-  const keys = sessions.map(statusOf)
+/**
+ * Counts projects, not sessions — the same unit the desktop widget uses.
+ *
+ * They used to differ, so one project with three running sessions gave
+ * 「⚓ 3 在跑」in the menu bar and 「1 在跑」on the desktop at the same moment.
+ * Both are defensible; showing both at once is not, because the screen carries
+ * only the number.
+ */
+function renderTitle(projects: readonly ProjectView[]): string {
+  const keys = projects.map((p) => p.aggregateStatus)
   for (const key of ['crashed', 'busy', 'idle'] as const) {
     const n = keys.filter((k) => k === key).length
     if (n === 0) continue

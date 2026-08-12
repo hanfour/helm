@@ -330,3 +330,27 @@ test('clean 同時處理管線字元與換行', () => {
   assert.ok(!out.includes('a\nb'), '換行必須被換掉')
   assert.match(out, /^a bc {2}/m)
 })
+
+test('標題數的是專案，跟桌面 widget 同一個單位', () => {
+  // 兩邊看的是同一份資料。之前選單列數 session、widget 數專案，於是
+  // 一個專案裡三個 session 在跑時，選單列寫「3 在跑」而桌面寫「1 在跑」。
+  // 畫面上只有數字，使用者無從知道兩者在數不同的東西。
+  const out = renderSwiftBar(board([proj({
+    aggregateStatus: 'busy',
+    sessions: [
+      sess({ nativeStatus: 'busy' }),
+      sess({ sessionId: 'bbbbbbbb-3456-7890-abcd-ef1234567890', nativeStatus: 'busy' }),
+      sess({ sessionId: 'cccccccc-3456-7890-abcd-ef1234567890', nativeStatus: 'busy' }),
+    ],
+  })]), OPTS)
+  assert.match(title(out), /⚓ 1 在跑/, title(out))
+})
+
+test('多個專案時數的是專案數', () => {
+  const out = renderSwiftBar(board([
+    proj({ path: '/a', aggregateStatus: 'busy', sessions: [sess({ nativeStatus: 'busy' })] }),
+    proj({ path: '/b', aggregateStatus: 'busy', sessions: [sess({ nativeStatus: 'busy' })] }),
+    proj({ path: '/c', aggregateStatus: 'idle' }),
+  ]), OPTS)
+  assert.match(title(out), /⚓ 2 在跑/, title(out))
+})
