@@ -91,3 +91,14 @@ test('LLM 回不出可解析的內容時退回原始提問清單，並以非零�
   assert.equal(r.code, 1)
   assert.match(r.out, /把匯出功能修好/)
 })
+
+test('專案底下沒有 session 時明講，而不是丟一份空簡報', async () => {
+  const home = scaffoldHome([{ project: 'empty', sessions: [] }])
+  let called = false
+  const r = await captureAsync(home, () => runBrief(['empty'], async () => {
+    called = true
+    return FAKE_BRIEF
+  }))
+  assert.equal(r.code, 1)
+  assert.equal(called, false, '沒有 session 就不該花錢')
+})

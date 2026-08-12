@@ -1,6 +1,6 @@
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { runPrefs, type PrefAction } from './prefs.ts'
 import { collectStatus } from './status.ts'
@@ -159,4 +159,21 @@ test('以 -- 開頭的專案名也指定得到 —— 用 -- 當旗標結束標�
   const r = captureSync(home, () => runPrefs('hide', ['--', '--evil']))
   assert.equal(r.code, 0, r.err)
   assert.equal(readPrefsOf(home).projects[join(home, '--evil')]?.hidden, true)
+})
+
+test('偏好檔搬不開時拒絕寫入，並把決定權還給使用者', () => {
+  // rename 需要目錄的寫入權限，就地截斷不需要 —— 所以「搬不開但寫得進去」
+  // 是真實存在的狀態，也正是使用者的設定會靜默消失的那一個。
+  const home = scaffold('proj')
+  mkdirSync(join(home, '.helm'), { recursive: true })
+  writeFileSync(join(home, '.helm', 'projects.json'), '{壞掉')
+  chmodSync(join(home, '.helm'), 0o555)
+  try {
+    const r = run(home, 'pin', ['proj'])
+    assert.equal(r.code, 1)
+    assert.match(r.err, /搬不開/)
+    assert.equal(readFileSync(join(home, '.helm', 'projects.json'), 'utf8'), '{壞掉')
+  } finally {
+    chmodSync(join(home, '.helm'), 0o755)
+  }
 })
