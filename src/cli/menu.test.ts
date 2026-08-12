@@ -76,7 +76,9 @@ test('沒有專案時仍輸出合法的選單', () => {
 
 test('helm menu 自身的計算成本要留在預算內', () => {
   // SwiftBar 每 5 秒跑一次，所以任何隨 session 數成長的演算法都會現形。
-  const elapsed = timeMenu(withSessions(20))
+  // 五次取最小。負載只會讓時間變長，所以最小值最接近「helm 自己的成本」，
+  // 也是唯一不會因為隔壁測試檔剛好在忙而誤報的統計量。
+  const elapsed = Math.min(...Array.from({ length: 5 }, () => timeMenu(withSessions(20))))
   assert.ok(
     elapsed < OWN_WORK_BUDGET_MS,
     `花了 ${elapsed.toFixed(1)}ms，超過 ${OWN_WORK_BUDGET_MS}ms 預算`,
@@ -84,11 +86,13 @@ test('helm menu 自身的計算成本要留在預算內', () => {
 })
 
 test('成本不隨 session 數量爆炸 —— 四倍的量不該是四倍以上的時間', () => {
-  // 絕對值會隨機器負載浮動，比值不會。這一條抓的是二次方成長那一類的
-  // 回歸，而不是「今天機器比較忙」。
+  // 比值比絕對值穩，但還不夠：整套測試是每個檔案一個行程平行跑的，
+  // 大的那次剛好撞上排程就會偽陽性 —— 這條曾經因此在變異測試裡誤判過
+  // 一次「已被抓到」。取多次的最小值：負載只會讓時間變長，不會變短。
+  const best = (n: number) => Math.min(...Array.from({ length: 5 }, () => timeMenu(withSessions(n))))
   timeMenu(withSessions(20))
-  const small = timeMenu(withSessions(20))
-  const large = timeMenu(withSessions(80))
+  const small = best(20)
+  const large = best(80)
   assert.ok(large < small * 8 + 20, `20 個要 ${small.toFixed(1)}ms，80 個要 ${large.toFixed(1)}ms`)
 })
 

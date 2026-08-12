@@ -10,7 +10,8 @@ const USAGE = `helm — 本機 agent CLI 艦隊看板
   helm open  <專案或 id> [--no-brief]
                     [--refresh]       開終端機接續，並把簡報寫成檔案讓它讀
   helm install                        安裝 hook 與選單列 plugin（會先備份設定）
-  helm uninstall                      完全移除，還原設定
+  helm uninstall                      移除 hook 與看板，還原被 helm 改過的設定
+                                      （live 檔、快取與備份保留）
   helm pin|unpin <專案>               釘選／取消釘選（釘選的專案不受 14 天窗口約束）
   helm hide|show <專案>               隱藏／取消隱藏
   helm menu                           輸出 SwiftBar 格式（由選單列 plugin 呼叫）
