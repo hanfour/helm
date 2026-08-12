@@ -147,19 +147,24 @@ test('管線字元被過濾掉 —— 它是 SwiftBar 的參數分隔符，會�
 })
 
 test('專案名裡的管線字元同樣被過濾', () => {
+  // 原本這條是恆真的：它用 'ab' 當關鍵字去找那一列，而 'ab' 只在過濾成功
+  // 之後才存在 —— 過濾失效時 find 會挑到別的列，斷言照樣通過。
+  // 直接對整份輸出斷言就沒有這個漏洞。
   const out = renderSwiftBar(board([proj({ name: 'a|b' })]), OPTS)
-  const line = out.split('\n').find((l) => l.includes('ab')) ?? ''
-  assert.ok(!line.startsWith('a|b'))
+  assert.ok(!out.includes('a|b'), out)
+  assert.match(out, /^ab {2}/m)
 })
 
 test('每一列的參數都接在唯一一個管線字元之後', () => {
   // SwiftBar 用第一個 | 切開文字與參數。文字裡混進第二個會讓後半段
   // 被當成參數解析，整列就爛掉。
   const out = renderSwiftBar(board([proj({
+    name: 'a|b',
     pinned: true,
     sessions: [sess({
+      sessionId: 'c|d-1111-2222-3333-444444444444',
       nativeStatus: 'busy',
-      live: { sessionId: 'x', ts: NOW, toolName: 'Bash', summary: 'a | b | c', degraded: false },
+      live: { sessionId: 'x', ts: NOW, toolName: 'Ba|sh', summary: 'a | b | c', degraded: false },
     })],
   })], { invalid: 1 }), OPTS)
   for (const line of out.split('\n').filter((l) => l !== '' && l !== '---')) {
@@ -242,4 +247,86 @@ test('空看板時降級警告仍然顯示 —— 那正是最需要它的時候
   const out = renderSwiftBar(board([], { invalid: 7, prefsHealth: 'quarantined' as const }), OPTS)
   assert.match(out, /7 個/)
   assert.match(out, /偏好檔/)
+})
+
+
+test('busy 是實心、idle 是空心 —— 規格 §11.1 的核心狀態語彙', () => {
+  // 圓點對調不會讓任何既有測試變紅，但「在跑」與「等輸入」在選單列上
+  // 就反過來了。
+  const busy = renderSwiftBar(board([proj({
+    sessions: [sess({ nativeStatus: 'busy' })],
+  })]), OPTS)
+  const idle = renderSwiftBar(board([proj({
+    sessions: [sess({ nativeStatus: 'idle' })],
+  })]), OPTS)
+  assert.match(busy, /--● 執行中/)
+  assert.match(idle, /--○ 等輸入/)
+})
+
+test('已結束的 session 不顯示殘留的 live marker', () => {
+  // marker 只在 session 真的在跑時有意義。不看 nativeStatus 的話，一個
+  // 早就結束的 session 會一直掛著「→ Bash: rm -rf …」。
+  const out = renderSwiftBar(board([proj({
+    sessions: [sess({
+      lifecycle: 'ended_clean',
+      nativeStatus: null,
+      live: { sessionId: 'x', ts: NOW, toolName: 'Bash', summary: 'rm -rf tmp', degraded: false },
+    })],
+  })]), OPTS)
+  assert.ok(!out.includes('rm -rf tmp'), out)
+})
+
+test('動作項目比 session 深一層 —— 選單結構不能被壓平', () => {
+  const out = renderSwiftBar(board([proj()]), OPTS)
+  assert.match(out, /^----開終端機接續/m)
+  assert.match(out, /^----看交接簡報/m)
+  assert.match(out, /^--● |^--○ /m)
+})
+
+test('隱藏此專案是 session 的同層項目，不是 top-level', () => {
+  const out = renderSwiftBar(board([proj()]), OPTS)
+  const line = out.split('\n').find((l) => l.includes('param1=hide')) ?? ''
+  assert.ok(line.startsWith('--') && !line.startsWith('----'), line)
+})
+
+test('隱藏動作要求選單刷新，否則看起來沒生效', () => {
+  const line = renderSwiftBar(board([proj()]), OPTS).split('\n')
+    .find((l) => l.includes('param1=hide')) ?? ''
+  assert.match(line, /refresh=true/)
+  assert.match(line, /terminal=false/)
+})
+
+test('param3 帶的是前 8 碼，不是完整 session id', () => {
+  // 原本的斷言用 /param2=abcdef12/，對完整 UUID 也成立（前綴），所以
+  // 「不截短」這個變異抓不到。
+  const out = renderSwiftBar(board([proj()]), OPTS)
+  assert.match(out, /param3="abcdef12"/)
+  assert.ok(!out.includes('abcdef12-3456'), '不該出現完整 id')
+})
+
+test('重新整理與 doctor 兩個 footer 項目都是可用的', () => {
+  const out = renderSwiftBar(board([proj()]), OPTS)
+  assert.match(out, /^重新整理 \| refresh=true$/m)
+  assert.match(out, /^helm doctor \| bash="[^"]+" param1=doctor terminal=true$/m)
+})
+
+test('降級警告帶顏色，不會混在一般項目裡看不見', () => {
+  const out = renderSwiftBar(board([proj()], { invalid: 2 }), OPTS)
+  const line = out.split('\n').find((l) => l.includes('無法解析')) ?? ''
+  assert.match(line, /color=orange/)
+})
+
+test('專案列一定帶相對時間 —— 那是「最後做到哪」的唯一線索', () => {
+  const out = renderSwiftBar(board([proj()]), OPTS)
+  assert.match(out, /^proj {2}5 分鐘前/m)
+})
+
+test('輸出以換行結尾 —— SwiftBar 逐行解析', () => {
+  assert.ok(renderSwiftBar(board([proj()]), OPTS).endsWith('\n'))
+})
+
+test('clean 同時處理管線字元與換行', () => {
+  const out = renderSwiftBar(board([proj({ name: 'a\nb|c' })]), OPTS)
+  assert.ok(!out.includes('a\nb'), '換行必須被換掉')
+  assert.match(out, /^a bc {2}/m)
 })
