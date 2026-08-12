@@ -107,11 +107,12 @@ session_meta 的 payload 有 14 種形狀（2026-04 到 2026-08 的版本演進�
 
 **多形狀容忍：** `payload` 有 14 種變體。只取 `session_id ?? id` 與 `cwd`，其餘一律忽略——任何對其他欄位的依賴都會在下一次 Codex 改版時斷掉。
 
-- [ ] **Step 1：寫失敗測試**——第一行不是 JSON、`type` 不是 `session_meta`、`payload.cwd` 缺、cwd 不是絕對路徑（一律拒絕，同 `scan-dir.ts` 的理由）、18 KB 的第一行讀得完、快取命中時不碰檔案（用一個會丟例外的 reader 證明）
-- [ ] **Step 2：紅**
-- [ ] **Step 3：實作**——快取檔 `~/.helm/codex-cwd.json`，原子寫（temp + rename），讀不到就當空快取
-- [ ] **Step 4：綠**
-- [ ] **Step 5：commit**
+- [x] **Step 1：寫失敗測試**——第一行不是 JSON、`type` 不是 `session_meta`、`payload.cwd` 缺、cwd 不是絕對路徑（一律拒絕，同 `scan-dir.ts` 的理由）、18 KB 的第一行讀得完、快取命中時不碰檔案（用一個會丟例外的 reader 證明）
+- [x] **Step 2：紅**
+- [x] **Step 3：實作**——快取檔 `~/.helm/codex-cwd.json`，原子寫（temp + rename），讀不到就當空快取
+- [x] **Step 4：綠**
+- [x] **Step 5：實測驗證**——對真實的 192 個 rollout：**全部讀得出來（0 失敗）**，歸併成 86 個 session。冷讀 **15.6 ms** → 快取命中 **0.05 ms**
+- [x] **Step 6：commit**
 
 ### Task 4：Codex 行程的存活判定
 
