@@ -1,7 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync,
+  statSync, symlinkSync, writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -276,4 +277,46 @@ test('已有舊的 helm 條目但 hooks 形狀看不懂時，不謊報成功', (
   const report = installHook(resolvePaths({ home: h }), DEPS)
   assert.equal(report.ok, false)
   assert.ok(report.warnings.some((w) => w.includes('hooks')))
+})
+
+test('保留 settings.json 原有的檔案權限', () => {
+  // 0600 的檔案裡可能有 env 段的 token，安裝後變 0644 是安全退化。
+  const h = home({ env: { SOME_TOKEN: 'secret' } })
+  chmodSync(join(h, '.claude', 'settings.json'), 0o600)
+  installHook(resolvePaths({ home: h }), DEPS)
+  assert.equal(statSync(join(h, '.claude', 'settings.json')).mode & 0o777, 0o600)
+})
+
+test('settings.json 是 symlink 時寫進去的是真身，連結本身留著', () => {
+  // 用 dotfiles 管理設定是常見做法。把 symlink 換成普通檔會讓 dotfiles
+  // 從此永久斷開，而且不會有任何人告訴使用者。
+  const h = home()
+  const real = join(h, 'dotfiles-settings.json')
+  writeFileSync(real, JSON.stringify({ theme: 'dark' }, null, 2))
+  symlinkSync(real, join(h, '.claude', 'settings.json'))
+  installHook(resolvePaths({ home: h }), DEPS)
+  assert.equal(lstatSync(join(h, '.claude', 'settings.json')).isSymbolicLink(), true)
+  assert.ok(readFileSync(real, 'utf8').includes('HELM_LIVE_MARKER'), '真身必須被更新')
+})
+
+test('保留原本的縮排 —— 不讓一次安裝在 dotfiles 產生整檔 diff', () => {
+  const h = home()
+  writeFileSync(join(h, '.claude', 'settings.json'), JSON.stringify({ theme: 'dark' }, null, 4))
+  const paths = resolvePaths({ home: h })
+  installHook(paths, DEPS)
+  uninstallHook(paths, DEPS)
+  assert.equal(
+    readFileSync(join(h, '.claude', 'settings.json'), 'utf8'),
+    `${JSON.stringify({ theme: 'dark' }, null, 4)}\n`,
+  )
+})
+
+test('uninstall 前也會備份 —— 那才是真正在刪東西的那一邊', () => {
+  const h = home({ theme: 'dark' })
+  const paths = resolvePaths({ home: h })
+  installHook(paths, DEPS)
+  uninstallHook(paths, DEPS)
+  const backups = readdirSync(join(h, '.helm', 'backups'))
+  assert.equal(backups.length, 2, '安裝前一份、解除安裝前一份')
+  assert.ok(backups.some((n) => n.includes('uninstall')))
 })

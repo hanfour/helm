@@ -59,10 +59,11 @@ test('removeHelmHook 只拿掉自己的，別人的留著', () => {
   assert.equal(hasHelmHook(out), false)
 })
 
-test('解除安裝後的設定與安裝前逐字相同', () => {
-  // 「30 秒內完全脫身」的意思是拿回一模一樣的檔案，不是「差不多」的檔案。
-  // 這條同時鎖住兩件事：add 不得順手改寫別的欄位，remove 不得留下空的
-  // hooks: {} 或 PreToolUse: [] 殘骸。
+test('解除安裝後的設定結構與安裝前完全相同', () => {
+  // 這一條比對的是解析後的物件：欄位、值與鍵的順序都不能變，add 不得順手
+  // 改寫別的欄位，remove 不得留下空的 hooks: {} 或 PreToolUse: [] 殘骸。
+  // 位元組層級的還原（縮排、換行）由 install.test.ts 的「保留原本的縮排」
+  // 那一條負責 —— 兩者是不同的保證，不要混為一談。
   assert.deepEqual(removeHelmHook(addHelmHook(FOREIGN, CMD)), FOREIGN)
   assert.deepEqual(removeHelmHook(addHelmHook(REAL, CMD)), REAL)
 })

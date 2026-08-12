@@ -1,4 +1,7 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync,
+  writeFileSync,
+} from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import type { HelmPaths } from '../paths.ts'
 import { addHelmHook, hasHelmHook, removeHelmHook } from './settings.ts'
@@ -95,7 +98,7 @@ function apply(
     const stamp = new Date(deps.now()).toISOString().replace(/:/g, '-')
     const backup = join(paths.backupsDir, `settings-${stamp}.${process.pid}.json`)
     mkdirSync(paths.backupsDir, { recursive: true })
-    writeFileSync(backup, readFileSync(paths.claudeSettings, 'utf8'), { encoding: 'utf8', mode: 0o600 })
+    writeBackup(backup, readFileSync(paths.claudeSettings, 'utf8'))
     steps.push(`已備份安裝前的設定到 ${backup}`)
   }
 
@@ -142,6 +145,13 @@ export function uninstallHook(paths: HelmPaths, deps: InstallDeps): InstallRepor
   if (settings === UNREADABLE) {
     warnings.push(`${paths.claudeSettings} 無法解析，未改動它。hook 設定可能還留著，請自行檢查。`)
   } else if (hasHelmHook(settings)) {
+    // Uninstall is the side that deletes, so it gets a backup too. Install had
+    // one from the start and this did not, which was exactly backwards.
+    const stamp = new Date(deps.now()).toISOString().replace(/:/g, '-')
+    const backup = join(paths.backupsDir, `settings-before-uninstall-${stamp}.${process.pid}.json`)
+    mkdirSync(paths.backupsDir, { recursive: true })
+    writeBackup(backup, readFileSync(paths.claudeSettings, 'utf8'))
+    steps.push(`已備份解除安裝前的設定到 ${backup}`)
     writeJsonAtomic(paths.claudeSettings, removeHelmHook(settings))
     steps.push(`已從 ${paths.claudeSettings} 移除 hook`)
   }
@@ -216,14 +226,60 @@ function readSettings(file: string): unknown {
     : UNREADABLE
 }
 
+/** settings.json may hold tokens under `env`; a backup of it deserves the same. */
+function writeBackup(path: string, body: string): void {
+  writeFileSync(path, body, { encoding: 'utf8', mode: 0o600 })
+}
+
 /**
  * Write to a sibling then rename. `writeFileSync` truncates in place, so a
  * crash mid-write would leave the user with a half-written settings.json and
  * a Claude Code that no longer starts cleanly.
+ *
+ * Three properties of the original are carried across, because rename replaces
+ * the inode and would otherwise quietly discard all three:
+ *   - the symlink, by resolving it first and writing the real file. Managing
+ *     ~/.claude/settings.json from a dotfiles repo is common, and replacing
+ *     the link with a plain file severs that for good with no message.
+ *   - the mode, so a deliberately 0600 file does not come back 0644.
+ *   - the indent, so one install does not rewrite every line of a file the
+ *     user keeps in git.
  */
 function writeJsonAtomic(file: string, value: unknown): void {
   mkdirSync(dirname(file), { recursive: true })
-  const temp = `${file}.${process.pid}.tmp`
-  writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
-  renameSync(temp, file)
+  const target = realPathOf(file)
+  const indent = indentOf(target)
+  const temp = `${target}.${process.pid}.tmp`
+  writeFileSync(temp, `${JSON.stringify(value, null, indent)}\n`, 'utf8')
+  const mode = modeOf(target)
+  if (mode !== null) chmodSync(temp, mode)
+  renameSync(temp, target)
+}
+
+function realPathOf(file: string): string {
+  try {
+    return realpathSync(file)
+  } catch {
+    // Not there yet — writing the path as given is exactly right.
+    return file
+  }
+}
+
+function modeOf(file: string): number | null {
+  try {
+    return statSync(file).mode & 0o777
+  } catch {
+    // No original to copy from; the default mode is correct for a new file.
+    return null
+  }
+}
+
+/** Detected rather than assumed, from the first indented line. Defaults to 2. */
+function indentOf(file: string): number {
+  try {
+    const match = readFileSync(file, 'utf8').match(/\n([ ]+)\S/)
+    return match?.[1]?.length ?? 2
+  } catch {
+    return 2
+  }
 }
