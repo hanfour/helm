@@ -147,14 +147,27 @@ test('沒裝過就解除安裝不丟錯，也不動 settings.json', () => {
   assert.deepEqual(readSettings(h), { theme: 'dark' })
 })
 
-test('重複安裝只留一份 hook，且只備份實際存在過的檔案', () => {
+test('重複安裝只留一份 hook，備份也只留安裝前那一份', () => {
+  // 第二份備份會是「已經含 helm hook」的檔案。使用者照直覺還原最新的備份
+  // 會讓 helm 又回來 —— 那正好是他想擺脫的東西。
   const h = home({ theme: 'dark' })
   const paths = resolvePaths({ home: h })
   installHook(paths, DEPS)
   installHook(paths, { ...DEPS, now: () => 1786000001000 })
   const settings = readSettings(h) as { hooks: { PreToolUse: unknown[] } }
   assert.equal(settings.hooks.PreToolUse.length, 1)
-  assert.equal(readdirSync(join(h, '.helm', 'backups')).length, 2)
+  const backups = readdirSync(join(h, '.helm', 'backups'))
+  assert.equal(backups.length, 1)
+  const body = readFileSync(join(h, '.helm', 'backups', backups[0] as string), 'utf8')
+  assert.ok(!body.includes('HELM_LIVE_MARKER'), '備份必須是安裝前的乾淨狀態')
+})
+
+test('備份檔權限為 0600 —— settings.json 可能含 env 裡的 token', () => {
+  const h = home({ env: { SOME_TOKEN: 'secret' } })
+  installHook(resolvePaths({ home: h }), DEPS)
+  const backups = readdirSync(join(h, '.helm', 'backups'))
+  const mode = statSync(join(h, '.helm', 'backups', backups[0] as string)).mode & 0o777
+  assert.equal(mode, 0o600)
 })
 
 test('安裝是原子的 —— 不留半份 settings.json 也不留暫存檔', () => {
@@ -227,4 +240,40 @@ test('uninstall 不刪別人的 SwiftBar plugin', () => {
   writeFileSync(plugin, '#!/bin/sh\necho someone elses\n')
   uninstallHook(resolvePaths({ home: h }), DEPS)
   assert.match(readFileSync(plugin, 'utf8'), /someone elses/)
+})
+
+test('頂層不是物件的 settings.json 被拒絕，不是被取代', () => {
+  // readSettings 花了整段註解說明「絕不退化成空物件再寫回去」，但 JSON.parse
+  // 成功而值是陣列/字串/數字時，asRecord 就回 {} 然後照寫。
+  for (const body of ['[{"important":"user data"}]', '"just a string"', 'null', '42']) {
+    const h = home()
+    writeFileSync(join(h, '.claude', 'settings.json'), body)
+    const report = installHook(resolvePaths({ home: h }), DEPS)
+    assert.equal(report.ok, false, `不該接受：${body}`)
+    assert.equal(readFileSync(join(h, '.claude', 'settings.json'), 'utf8'), body)
+  }
+})
+
+test('中途失敗時仍回報已經做了哪些事', () => {
+  // settings.json 已經被改、hook 已經生效之後才丟例外，使用者只看到一行
+  // EACCES 就合理判斷「安裝失敗」而不去 uninstall —— 但機器已經被改了。
+  const h = home({ theme: 'dark' })
+  writeFileSync(join(h, '.local'), 'not a directory')
+  const report = installHook(resolvePaths({ home: h }), DEPS)
+  assert.equal(report.ok, false)
+  assert.ok(report.steps.some((s) => s.includes('已把 hook 加進')), '已完成的步驟必須說出來')
+  assert.ok(report.warnings.some((w) => w.includes('helm uninstall')), '要告訴使用者怎麼收回')
+  assert.equal(hasHelmHook(readSettings(h)), true)
+})
+
+test('已有舊的 helm 條目但 hooks 形狀看不懂時，不謊報成功', () => {
+  // repo 搬家後重跑 install「修路徑」，實際上只是把原檔重寫一遍。
+  const h = home({
+    hooks: {
+      PreToolUse: 'not an array',
+    },
+  })
+  const report = installHook(resolvePaths({ home: h }), DEPS)
+  assert.equal(report.ok, false)
+  assert.ok(report.warnings.some((w) => w.includes('hooks')))
 })

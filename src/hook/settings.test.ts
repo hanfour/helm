@@ -135,3 +135,40 @@ test('形狀像但不是 helm 寫的（沒有 marker）也不會被刪', () => {
   assert.equal(hasHelmHook(foreign), false)
   assert.deepEqual(removeHelmHook(foreign), foreign)
 })
+
+test('hooks 底下無關事件的形狀不影響安裝 —— 只驗 PreToolUse', () => {
+  // 舊的 schema 要求每個事件的每個項目都有 command: string，於是一個
+  // { type: 'prompt' } 的 SessionStart hook 就讓所有人都裝不起來。
+  // Claude Code 未來多一種 hook 形狀就會中。
+  const foreign = {
+    hooks: { SessionStart: [{ hooks: [{ type: 'prompt', prompt: 'hi' }] }] },
+  }
+  const out = addHelmHook(foreign, CMD)
+  assert.equal(hasHelmHook(out), true)
+  assert.deepEqual((out['hooks'] as { SessionStart: unknown }).SessionStart,
+    foreign.hooks.SessionStart)
+})
+
+test('PreToolUse 本身形狀不對時仍然拒絕', () => {
+  const weird = { hooks: { PreToolUse: 'not an array' } }
+  assert.deepEqual(addHelmHook(weird, CMD), weird)
+})
+
+test('removeHelmHook 掃描所有事件，不只 PreToolUse', () => {
+  // 使用者手動把 helm 的 group 複製到別的事件之後，那是一條仍在寫
+  // ~/.helm/live 的活 hook，uninstall 必須看得到它。
+  const installed = {
+    hooks: {
+      PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: CMD }] }],
+      PostToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: CMD }] }],
+    },
+  }
+  const out = removeHelmHook(installed)
+  assert.equal(JSON.stringify(out).includes(HOOK_MARKER), false)
+})
+
+test('hasHelmHook 也看得到非 PreToolUse 的殘留', () => {
+  assert.equal(hasHelmHook({
+    hooks: { PostToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: CMD }] }] },
+  }), true)
+})

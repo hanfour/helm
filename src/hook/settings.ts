@@ -7,17 +7,16 @@ const HookGroup = z.object({
   hooks: z.array(HookEntry).default([]),
 }).passthrough()
 
+/**
+ * Only `PreToolUse` is validated, and only because helm writes into it.
+ * Validating every event would let a hook shape helm has never heard of —
+ * `{ type: 'prompt' }` exists today, and more will follow — block install for
+ * everyone, over a key helm does not touch.
+ */
+const PreToolUseSchema = z.array(HookGroup)
+
 /** Exactly what `buildHookCommand` emits, so nothing else can be mistaken for it. */
 const COMMAND_PREFIX = 'exec node --no-warnings '
-
-/**
- * Only the `hooks` key is described. Everything else in the user's
- * settings.json is carried through untouched and unvalidated — helm has no
- * business having an opinion about it.
- */
-const SettingsSchema = z.object({
-  hooks: z.record(z.string(), z.array(HookGroup)).optional(),
-}).passthrough()
 
 type Settings = Record<string, unknown>
 
@@ -29,15 +28,17 @@ const DESCRIPTION = 'helm —— 記錄此刻正在執行的工具'
  * only acceptable footprint is one entry that `removeHelmHook` can take back
  * out again leaving no trace.
  *
- * Returns the input unchanged when `hooks` is not the shape we understand —
- * writing into something we cannot parse would destroy configuration the user
- * maintains by hand.
+ * Returns the input unchanged when `hooks.PreToolUse` is not the shape we
+ * understand — writing into something we cannot parse would destroy
+ * configuration the user maintains by hand.
  */
 export function addHelmHook(settings: unknown, command: string): Settings {
   const base = asRecord(settings)
-  if (!SettingsSchema.safeParse(base).success) return base
-  const hooks = (base['hooks'] ?? {}) as Record<string, unknown[]>
-  const existing = (hooks['PreToolUse'] ?? []) as unknown[]
+  const hooks = base['hooks'] === undefined ? {} : base['hooks']
+  if (!isRecord(hooks)) return base
+  const existing = hooks['PreToolUse'] === undefined ? [] : hooks['PreToolUse']
+  if (!PreToolUseSchema.safeParse(existing).success) return base
+
   return {
     ...base,
     hooks: {
@@ -45,7 +46,7 @@ export function addHelmHook(settings: unknown, command: string): Settings {
       PreToolUse: [
         // Filtering first makes a repeat install an update rather than a
         // duplicate — the command string changes whenever the repo moves.
-        ...existing.filter((g) => !isHelmGroup(g)),
+        ...(existing as unknown[]).filter((g) => !isHelmGroup(g)),
         {
           matcher: '*',
           // Async because this hook only ever records — it never inspects or
@@ -61,21 +62,27 @@ export function addHelmHook(settings: unknown, command: string): Settings {
 }
 
 /**
- * Leaves the file exactly as it was before install. An empty `PreToolUse`
- * array or an empty `hooks` object would be residue, and residue is how
- * "uninstall" quietly becomes "mostly uninstall".
+ * Leaves the file exactly as it was before install. An empty event array or an
+ * empty `hooks` object would be residue, and residue is how "uninstall"
+ * quietly becomes "mostly uninstall".
+ *
+ * Every event is scanned, not just `PreToolUse`: a copy someone moved to
+ * `PostToolUse` by hand is still a live hook writing into ~/.helm/live, and
+ * leaving it behind is the one thing uninstall must never do.
  */
 export function removeHelmHook(settings: unknown): Settings {
   const base = asRecord(settings)
   const hooks = base['hooks']
   if (!isRecord(hooks)) return base
-  const existing = Array.isArray(hooks['PreToolUse']) ? hooks['PreToolUse'] : []
-  const kept = existing.filter((g) => !isHelmGroup(g))
-  if (kept.length === existing.length) return base
 
-  const nextHooks = kept.length > 0
-    ? { ...hooks, PreToolUse: kept }
-    : omit(hooks, 'PreToolUse')
+  const nextHooks = Object.fromEntries(
+    Object.entries(hooks).flatMap(([event, groups]) => {
+      if (!Array.isArray(groups)) return [[event, groups] as const]
+      const kept = groups.filter((g) => !isHelmGroup(g))
+      return kept.length === 0 ? [] : [[event, kept] as const]
+    }),
+  )
+  if (JSON.stringify(nextHooks) === JSON.stringify(hooks)) return base
   return Object.keys(nextHooks).length > 0
     ? { ...base, hooks: nextHooks }
     : omit(base, 'hooks')
@@ -84,8 +91,7 @@ export function removeHelmHook(settings: unknown): Settings {
 export function hasHelmHook(settings: unknown): boolean {
   const hooks = asRecord(settings)['hooks']
   if (!isRecord(hooks)) return false
-  const pre = hooks['PreToolUse']
-  return Array.isArray(pre) && pre.some(isHelmGroup)
+  return Object.values(hooks).some((groups) => Array.isArray(groups) && groups.some(isHelmGroup))
 }
 
 /**

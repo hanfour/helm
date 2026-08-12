@@ -20,8 +20,12 @@ export function runUninstall(_argv: readonly string[]): number {
 function report(result: InstallReport, verb: string): number {
   for (const s of result.steps) process.stdout.write(`✓ ${s}\n`)
   for (const w of result.warnings) process.stderr.write(`⚠ ${w}\n`)
-  if (result.steps.length === 0) {
-    process.stderr.write(`${verb}沒有做任何事，見上方原因。\n`)
+  if (!result.ok) {
+    process.stderr.write(
+      result.steps.length === 0
+        ? `${verb}沒有做任何事，見上方原因。\n`
+        : `${verb}沒有完成，但上面那些步驟已經生效。\n`,
+    )
     return 1
   }
   process.stdout.write(
