@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { resolvePaths } from '../paths.ts'
 import { runChecks, sweepStaleLive, type Check } from './health.ts'
+import type { SwiftBarDeps } from './swiftbar.ts'
 import type { Board } from '../board.ts'
 import type { SessionState } from '../types.ts'
 
@@ -42,11 +43,16 @@ function home(): string {
 const marker = (sessionId: string) =>
   JSON.stringify({ sessionId, ts: 0, toolName: 'Bash', summary: 'x' })
 
+const noSwiftBarPref: SwiftBarDeps = { readPref: () => null, writePref: () => {} }
+
+const checksOf = (home: string, b = board(), sb: SwiftBarDeps = noSwiftBarPref) =>
+  runChecks(resolvePaths({ home }), b, sb)
+
 const find = (checks: readonly Check[], name: string) =>
   checks.find((c) => c.name.includes(name))
 
 test('hook 未安裝時檢查不通過，並告訴使用者怎麼裝', () => {
-  const c = find(runChecks(resolvePaths({ home: home() }), board()), 'hook')
+  const c = find(checksOf(home(), board()), 'hook')
   assert.equal(c?.ok, false)
   assert.match(c?.detail ?? '', /helm install/)
 })
@@ -57,30 +63,30 @@ test('hook 錯誤紀錄非空時檢查不通過並印出內容', () => {
   const h = home()
   mkdirSync(join(h, '.helm'), { recursive: true })
   writeFileSync(join(h, '.helm', 'hook-errors.log'), 'sh: 壞掉了\n')
-  const c = find(runChecks(resolvePaths({ home: h }), board()), '錯誤')
+  const c = find(checksOf(h, board()), '錯誤')
   assert.equal(c?.ok, false)
   assert.match(c?.detail ?? '', /壞掉了/)
 })
 
 test('註冊表有解析失敗時如實回報數量 —— table.ts 承諾過這裡查得到原因', () => {
-  const c = find(runChecks(resolvePaths({ home: home() }), board([], { invalid: 3 })), '註冊表')
+  const c = find(checksOf(home(), board([], { invalid: 3 })), '註冊表')
   assert.equal(c?.ok, false)
   assert.match(c?.detail ?? '', /3/)
 })
 
 test('偏好檔毀損時回報，並指出原檔被保留在哪', () => {
-  const c = find(runChecks(resolvePaths({ home: home() }), board([], { prefsHealth: 'quarantined' as const })), '偏好')
+  const c = find(checksOf(home(), board([], { prefsHealth: 'quarantined' as const })), '偏好')
   assert.equal(c?.ok, false)
   assert.match(c?.detail ?? '', /corrupt/)
 })
 
 test('live 目錄不存在時檢查不通過', () => {
-  const c = find(runChecks(resolvePaths({ home: home() }), board()), 'live')
+  const c = find(checksOf(home(), board()), 'live')
   assert.equal(c?.ok, false)
 })
 
 test('每一項都帶名稱與說明，沒有空欄位', () => {
-  const checks = runChecks(resolvePaths({ home: home() }), board())
+  const checks = checksOf(home(), board())
   assert.ok(checks.length >= 6)
   assert.ok(checks.every((c) => c.name !== '' && c.detail !== ''))
 })
@@ -206,7 +212,7 @@ test('資料來源整個讀不到時檢查不通過 —— invalid: 0 不代表�
   mkdirSync(sessions, { recursive: true })
   chmodSync(sessions, 0o000)
   try {
-    const c = find(runChecks(resolvePaths({ home: h }), board()), '資料來源')
+    const c = find(checksOf(h, board()), '資料來源')
     assert.equal(c?.ok, false)
     assert.match(c?.detail ?? '', /sessions/)
   } finally {
@@ -220,7 +226,7 @@ test('live 目錄存在但不可寫時檢查不通過 —— 那正是這一項�
   mkdirSync(live, { recursive: true })
   chmodSync(live, 0o500)
   try {
-    const c = find(runChecks(resolvePaths({ home: h }), board()), 'live')
+    const c = find(checksOf(h, board()), 'live')
     assert.equal(c?.ok, false)
     assert.match(c?.detail ?? '', /寫/)
   } finally {
@@ -235,7 +241,7 @@ test('錯誤紀錄寫不進去時檢查不通過 —— 否則 hook 停擺而 do
   mkdirSync(join(h, '.helm'), { recursive: true })
   chmodSync(join(h, '.helm'), 0o500)
   try {
-    const c = find(runChecks(resolvePaths({ home: h }), board()), '錯誤紀錄')
+    const c = find(checksOf(h, board()), '錯誤紀錄')
     assert.equal(c?.ok, false)
   } finally {
     chmodSync(join(h, '.helm'), 0o755)
@@ -247,7 +253,7 @@ test('settings.json 解析不了時說的是「讀不到」，而不是「未安
   // 建議在原地打轉。而且 hook 可能其實裝著，只是檔案被別的工具弄壞了。
   const h = home()
   writeFileSync(join(h, '.claude', 'settings.json'), '{壞掉')
-  const c = find(runChecks(resolvePaths({ home: h }), board()), 'hook')
+  const c = find(checksOf(h, board()), 'hook')
   assert.equal(c?.ok, false)
   assert.match(c?.detail ?? '', /無法解析/)
   assert.ok(!(c?.detail ?? '').includes('helm install'), '不該叫使用者跑一個會拒絕執行的指令')
@@ -257,18 +263,18 @@ test('hook 錯誤紀錄的說明要講出檔案在哪、以及可以清掉', () 
   const h = home()
   mkdirSync(join(h, '.helm'), { recursive: true })
   writeFileSync(join(h, '.helm', 'hook-errors.log'), 'boom\n')
-  const c = find(runChecks(resolvePaths({ home: h }), board()), '錯誤紀錄')
+  const c = find(checksOf(h, board()), '錯誤紀錄')
   assert.match(c?.detail ?? '', /hook-errors\.log/)
   assert.match(c?.detail ?? '', /清/)
 })
 
 test('SwiftBar plugin 沒有執行權限時檢查不通過 —— SwiftBar 不會跑它', () => {
   const h = home()
-  const dir = join(h, 'Library', 'Application Support', 'SwiftBar')
+  const dir = join(h, 'SwiftBar')
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, 'helm.5s.sh'), '#!/bin/sh\n')
   chmodSync(join(dir, 'helm.5s.sh'), 0o644)
-  const c = find(runChecks(resolvePaths({ home: h }), board()), 'SwiftBar')
+  const c = find(checksOf(h, board()), 'SwiftBar')
   // SwiftBar 本身未安裝時這一項本來就不通過，所以只在有裝的機器上才有意義。
   if (existsSync('/Applications/SwiftBar.app')) {
     assert.equal(c?.ok, false)

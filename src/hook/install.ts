@@ -6,9 +6,11 @@ import { dirname, join, resolve } from 'node:path'
 import type { HelmPaths } from '../paths.ts'
 import { addHelmHook, hasHelmHook, removeHelmHook } from './settings.ts'
 import { buildHookCommand, HOOK_MARKER, shellQuote } from './snippet.ts'
+import {
+  adoptPluginDir, defaultSwiftBarDeps, PLUGIN_NAME, scannedPluginDir, type SwiftBarDeps,
+} from './swiftbar.ts'
 
 const SWIFTBAR_APP = '/Applications/SwiftBar.app'
-const PLUGIN_NAME = 'helm.5s.sh'
 
 /**
  * Written into every script helm generates, so uninstall can tell its own
@@ -23,6 +25,7 @@ export interface InstallDeps {
   repoRoot: string
   /** Injected so the SwiftBar branches are testable on any machine. */
   swiftbarInstalled?: boolean
+  swiftbar?: SwiftBarDeps
 }
 
 export interface InstallReport {
@@ -117,7 +120,12 @@ function apply(
   else warnings.push(`${wrapper} 已經存在且不是 helm 寫的（Kubernetes 的 helm 也叫這個名字），未覆寫。想用 helm 指令請自行改名或換一個位置。`)
 
   if (deps.swiftbarInstalled ?? existsSync(SWIFTBAR_APP)) {
-    const plugin = join(swiftbarPluginDir(paths), PLUGIN_NAME)
+    const swiftbar = deps.swiftbar ?? defaultSwiftBarDeps()
+    // Install into the folder SwiftBar actually scans. Putting the plugin
+    // anywhere else is the silent dead end this whole path guards against:
+    // every file in place, every check green, and an empty menu bar.
+    const dir = scannedPluginDir(paths, swiftbar)
+    const plugin = join(dir, PLUGIN_NAME)
     // Absolute path: SwiftBar runs plugins with a minimal PATH that will not
     // contain ~/.local/bin. Falls back to the entry point directly when the
     // wrapper is somebody else's file.
@@ -126,6 +134,12 @@ function apply(
       steps.push(`已安裝 SwiftBar plugin：${plugin}`)
     } else {
       warnings.push(`${plugin} 已經存在且不是 helm 寫的，未覆寫。`)
+    }
+    // Writing this before SwiftBar's first launch skips its folder picker —
+    // a manual, GUI-only step helm cannot perform, and one that hides the
+    // failure completely when it is left undone.
+    if (adoptPluginDir(dir, swiftbar)) {
+      steps.push(`已把 SwiftBar 的 plugin 資料夾設為 ${dir}`)
     }
   } else {
     warnings.push('找不到 SwiftBar，選單列看板尚未啟用。安裝方式：brew install --cask swiftbar，裝好後重跑 helm install。')
@@ -156,7 +170,14 @@ export function uninstallHook(paths: HelmPaths, deps: InstallDeps): InstallRepor
     steps.push(`已從 ${paths.claudeSettings} 移除 hook`)
   }
 
-  for (const path of [wrapperPath(paths), join(swiftbarPluginDir(paths), PLUGIN_NAME)]) {
+  const swiftbar = deps.swiftbar ?? defaultSwiftBarDeps()
+  for (const path of [
+    wrapperPath(paths),
+    join(scannedPluginDir(paths, swiftbar), PLUGIN_NAME),
+    // The pre-rename default, so an install from before this moved still
+    // gets cleaned up rather than left running.
+    join(paths.home, 'Library', 'Application Support', 'SwiftBar', PLUGIN_NAME),
+  ]) {
     if (!isOurScript(path)) continue
     rmSync(path, { force: true })
     steps.push(`已移除 ${path}`)
@@ -171,10 +192,6 @@ export function uninstallHook(paths: HelmPaths, deps: InstallDeps): InstallRepor
 
 function wrapperPath(paths: HelmPaths): string {
   return join(paths.home, '.local', 'bin', 'helm')
-}
-
-function swiftbarPluginDir(paths: HelmPaths): string {
-  return join(paths.home, 'Library', 'Application Support', 'SwiftBar')
 }
 
 /** Compares resolved paths, so a stray trailing slash is not a false warning. */

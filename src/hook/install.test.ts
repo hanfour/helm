@@ -10,7 +10,27 @@ import { resolvePaths } from '../paths.ts'
 import { installHook, uninstallHook } from './install.ts'
 import { hasHelmHook } from './settings.ts'
 
-const DEPS = { now: () => 1786000000000, repoRoot: '/repo' }
+/** A fake `defaults` domain, so no test ever touches the real SwiftBar. */
+const fakeSwiftBar = (initial: Record<string, string> = {}) => {
+  const store = { ...initial }
+  return {
+    store,
+    deps: {
+      readPref: (k: string) => store[k] ?? null,
+      writePref: (k: string, v: string) => {
+        store[k] = v
+      },
+    },
+  }
+}
+
+// Stateless by default: a shared mutable store would let the first test that
+// installs leak its PluginDirectory into every test after it.
+const DEPS = {
+  now: () => 1786000000000,
+  repoRoot: '/repo',
+  swiftbar: { readPref: () => null, writePref: () => {} },
+}
 
 function home(settings?: object): string {
   const h = mkdtempSync(join(tmpdir(), 'helm-install-'))
@@ -89,7 +109,7 @@ test('SwiftBar 未安裝時給出提示但不擋安裝', () => {
 test('SwiftBar 有裝時一併安裝可執行的 plugin', () => {
   const h = home({})
   installHook(resolvePaths({ home: h }), { ...DEPS, swiftbarInstalled: true })
-  const plugin = join(h, 'Library', 'Application Support', 'SwiftBar', 'helm.5s.sh')
+  const plugin = join(h, 'SwiftBar', 'helm.5s.sh')
   assert.match(readFileSync(plugin, 'utf8'), /helm' menu/)
   assert.ok((statSync(plugin).mode & 0o111) !== 0)
 })
@@ -97,8 +117,29 @@ test('SwiftBar 有裝時一併安裝可執行的 plugin', () => {
 test('SwiftBar plugin 走 wrapper 的絕對路徑 —— 它的 PATH 很精簡', () => {
   const h = home({})
   installHook(resolvePaths({ home: h }), { ...DEPS, swiftbarInstalled: true })
-  const plugin = join(h, 'Library', 'Application Support', 'SwiftBar', 'helm.5s.sh')
+  const plugin = join(h, 'SwiftBar', 'helm.5s.sh')
   assert.ok(readFileSync(plugin, 'utf8').includes(join(h, '.local', 'bin', 'helm')))
+})
+
+test('沒設定過時把 SwiftBar 指向我們的資料夾 —— 跳過那個只能手動點的對話框', () => {
+  const h = home({})
+  const sb = fakeSwiftBar()
+  const report = installHook(resolvePaths({ home: h }), {
+    ...DEPS, swiftbarInstalled: true, swiftbar: sb.deps,
+  })
+  assert.equal(sb.store['PluginDirectory'], join(h, 'SwiftBar'))
+  assert.ok(report.steps.some((s) => s.includes('plugin 資料夾')))
+})
+
+test('SwiftBar 已經指向別的資料夾時，plugin 就裝進去那裡', () => {
+  // 那是使用者自己選的，helm 沒有立場把它改掉；裝錯地方則是靜默失效。
+  const h = home({})
+  const sb = fakeSwiftBar({ PluginDirectory: join(h, 'my-plugins') })
+  installHook(resolvePaths({ home: h }), {
+    ...DEPS, swiftbarInstalled: true, swiftbar: sb.deps,
+  })
+  assert.ok(existsSync(join(h, 'my-plugins', 'helm.5s.sh')))
+  assert.equal(sb.store['PluginDirectory'], join(h, 'my-plugins'), '不該被覆寫')
 })
 
 test('解除安裝把 settings.json 還原成安裝前的樣子', () => {
@@ -127,10 +168,7 @@ test('解除安裝會移除 wrapper 與 SwiftBar plugin', () => {
   installHook(paths, { ...DEPS, swiftbarInstalled: true })
   uninstallHook(paths, DEPS)
   assert.equal(existsSync(join(h, '.local', 'bin', 'helm')), false)
-  assert.equal(
-    existsSync(join(h, 'Library', 'Application Support', 'SwiftBar', 'helm.5s.sh')),
-    false,
-  )
+  assert.equal(existsSync(join(h, 'SwiftBar', 'helm.5s.sh')), false)
 })
 
 test('解除安裝保留 live 檔與快取 —— 那是使用者的資料，不是我們的殘骸', () => {
@@ -205,9 +243,7 @@ test('別人的 helm 存在時，SwiftBar plugin 改為直接呼叫 node，不�
   mkdirSync(dirname(wrapper), { recursive: true })
   writeFileSync(wrapper, '#!/bin/sh\necho other\n')
   installHook(resolvePaths({ home: h }), { ...DEPS, swiftbarInstalled: true })
-  const plugin = readFileSync(
-    join(h, 'Library', 'Application Support', 'SwiftBar', 'helm.5s.sh'), 'utf8',
-  )
+  const plugin = readFileSync(join(h, 'SwiftBar', 'helm.5s.sh'), 'utf8')
   assert.ok(!plugin.includes(wrapper), '不該指向別人的 helm')
   assert.match(plugin, /main\.ts' menu/)
 })
@@ -236,7 +272,7 @@ test('uninstall 刪得掉自己寫的 wrapper', () => {
 
 test('uninstall 不刪別人的 SwiftBar plugin', () => {
   const h = home({})
-  const plugin = join(h, 'Library', 'Application Support', 'SwiftBar', 'helm.5s.sh')
+  const plugin = join(h, 'SwiftBar', 'helm.5s.sh')
   mkdirSync(dirname(plugin), { recursive: true })
   writeFileSync(plugin, '#!/bin/sh\necho someone elses\n')
   uninstallHook(resolvePaths({ home: h }), DEPS)

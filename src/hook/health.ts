@@ -7,11 +7,13 @@ import type { HelmPaths } from '../paths.ts'
 import { quarantinePath } from '../projects/prefs.ts'
 import { readLiveMarker } from '../reconcile/live.ts'
 import { hasHelmHook } from './settings.ts'
+import {
+  defaultSwiftBarDeps, PLUGIN_NAME, scannedPluginDir, type SwiftBarDeps,
+} from './swiftbar.ts'
 
 const ORPHAN_MAX_AGE_MS = 30 * 86_400_000
 const ERROR_TAIL_LINES = 5
 const SWIFTBAR_APP = '/Applications/SwiftBar.app'
-const PLUGIN_NAME = 'helm.5s.sh'
 
 export interface Check {
   name: string
@@ -20,7 +22,11 @@ export interface Check {
   detail: string
 }
 
-export function runChecks(paths: HelmPaths, board: Board): Check[] {
+export function runChecks(
+  paths: HelmPaths,
+  board: Board,
+  swiftbarDeps: SwiftBarDeps = defaultSwiftBarDeps(),
+): Check[] {
   return [
     hookInstalled(paths),
     hookErrors(paths),
@@ -29,7 +35,7 @@ export function runChecks(paths: HelmPaths, board: Board): Check[] {
     dataSources(paths),
     registryParse(paths, board),
     prefsHealth(paths, board),
-    swiftbar(paths),
+    swiftbar(paths, swiftbarDeps),
   ]
 }
 
@@ -161,7 +167,7 @@ function prefsHealth(paths: HelmPaths, board: Board): Check {
   }
 }
 
-function swiftbar(paths: HelmPaths): Check {
+function swiftbar(paths: HelmPaths, deps: SwiftBarDeps): Check {
   if (!existsSync(SWIFTBAR_APP)) {
     return {
       name: 'SwiftBar',
@@ -169,9 +175,17 @@ function swiftbar(paths: HelmPaths): Check {
       detail: '未安裝，選單列看板無法運作。brew install --cask swiftbar，裝好後執行 helm install。',
     }
   }
-  const plugin = join(paths.home, 'Library', 'Application Support', 'SwiftBar', PLUGIN_NAME)
+  // Checked against the folder SwiftBar actually scans, not the one helm would
+  // have picked. Those differing is precisely the failure that looks like
+  // success: plugin installed, executable, and the menu bar still empty.
+  const dir = scannedPluginDir(paths, deps)
+  const plugin = join(dir, PLUGIN_NAME)
   if (!existsSync(plugin)) {
-    return { name: 'SwiftBar', ok: false, detail: 'plugin 未安裝，執行 helm install。' }
+    return {
+      name: 'SwiftBar',
+      ok: false,
+      detail: `SwiftBar 掃描的是 ${dir}，裡面沒有 helm 的 plugin。執行 helm install。`,
+    }
   }
   // SwiftBar only runs plugins with the executable bit set, and a plugin that
   // lost it fails silently — the menu bar simply shows nothing.
