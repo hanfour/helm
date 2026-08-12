@@ -19,6 +19,13 @@ after(() => {
   }
 })
 
+test('測試環境下讀取真實偏好也會爆掉 —— 讀到使用者的設定就會照著改壞它', () => {
+  // Writes were guarded first and that was not enough: a doctor test read the
+  // real SwiftBar PluginDirectory, and helm dutifully installed the fixture's
+  // plugin into ~/SwiftBar, over the working one.
+  assert.throws(() => prefsFor('com.ameba.SwiftBar').readPref('PluginDirectory'), /HELM_NO_REAL_PREFS/)
+})
+
 test('測試環境下寫入真實偏好會直接爆掉，而不是默默改掉使用者的設定', () => {
   // This already happened once: a CLI test with no injected fake wrote a
   // /var/folders path into the real Übersicht domain, pointing the app at a
@@ -31,8 +38,8 @@ test('測試環境下寫入真實偏好會直接爆掉，而不是默默改掉�
   )
 })
 
-test('讀取不受影響 —— 讀不會改壞任何東西', () => {
-  assert.equal(prefsFor('com.example.definitely-not-a-real-domain').readPref('k'), null)
+test('com.helm.test.* 是測試自己的 domain，讀得到也寫得進去', () => {
+  assert.equal(prefsFor(`${TEST_DOMAIN}.unused`).readPref('k'), null)
 })
 
 test('非 ASCII 的值讀得回原樣 —— defaults read 會把它變成八進位跳脫', () => {

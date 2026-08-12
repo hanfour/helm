@@ -30,10 +30,16 @@ const fakeSwiftBar = (initial: Record<string, string> = {}) => {
 // installs leak its PluginDirectory into every test after it.
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url))
 
+const NO_PREFS = { readPref: () => null, writePref: () => {} }
+
 const DEPS = {
   now: () => 1786000000000,
   repoRoot: '/repo',
-  swiftbar: { readPref: () => null, writePref: () => {} },
+  // Both, always. Leaving either out sends that path to the real `defaults`
+  // database, which is how a test once overwrote the working SwiftBar plugin
+  // in ~/SwiftBar with one pointing at its own fixture.
+  swiftbar: NO_PREFS,
+  ubersicht: NO_PREFS,
 }
 
 function home(settings?: object): string {
