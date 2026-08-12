@@ -62,3 +62,85 @@ function extractCommand(widgetSource: string): string {
   assert.ok(m?.[1], `找不到 command：\n${widgetSource.slice(0, 300)}`)
   return JSON.parse(m[1]) as string
 }
+
+/**
+ * Runs the widget's own JSX-free logic block and hands back one of its
+ * functions, so these assertions exercise the code the desktop actually runs.
+ *
+ * Asserting on the source text instead is how the first version shipped a
+ * title that counted `ended` and `crashed` projects as "running" — the string
+ * `aggregateStatus` was present, and that was all a text assertion could see.
+ */
+function evalFn(widgetSource: string, name: string): (...args: never[]) => unknown {
+  const block = /\/\/ --- helm:logic ---[^\n]*\n([\s\S]*?)\/\/ --- \/helm:logic ---/.exec(widgetSource)
+  assert.ok(block?.[1], 'widget 裡找不到 helm:logic 區塊')
+  return new Function(`${block[1]}\nreturn ${name}`)() as (...args: never[]) => unknown
+}
+
+const proj = (aggregateStatus: string | null) => ({ aggregateStatus })
+
+test('標題只數真的在跑的專案 —— ended 與 crashed 都不是「在跑」', () => {
+  const titleOf = evalFn(widget(), 'titleOf') as (p: unknown[]) => { word: string }
+  assert.match(
+    titleOf([proj('busy'), proj('busy'), proj('ended'), proj('ended'), proj('idle'), proj(null)]).word,
+    /^2 在跑/,
+  )
+})
+
+test('有中斷的專案時，中斷優先顯示 —— 那是最需要處理的事', () => {
+  const titleOf = evalFn(widget(), 'titleOf') as (p: unknown[]) => { word: string }
+  assert.match(titleOf([proj('crashed'), proj('busy'), proj('busy')]).word, /^1 中斷/)
+})
+
+test('都沒在跑時說「都閒著」，不留空白', () => {
+  const titleOf = evalFn(widget(), 'titleOf') as (p: unknown[]) => { word: string }
+  assert.match(titleOf([proj('ended'), proj(null)]).word, /閒/)
+  assert.match(titleOf([]).word, /閒/)
+})
+
+test('每一種狀態都有自己的顏色，沒有一個落進預設值', () => {
+  // `waiting` was in the first version's colour table and is not a status
+  // helm produces; `ended` and `crashed` are, and both fell through to the
+  // idle grey — a crashed session looked exactly like an idle one.
+  const dotOf = evalFn(widget(), 'dotOf') as (s: string | null) => string
+  const colours = (['busy', 'idle', 'ended', 'crashed'] as const).map(dotOf)
+  assert.equal(new Set(colours).size, 4, `顏色撞在一起：${colours.join(', ')}`)
+  assert.ok(dotOf(null), 'aggregateStatus 可以是 null，也要有顏色')
+})
+
+test('只有真的在跑的專案才顯示當前動作 —— 停掉的那行是遺言，不是現況', () => {
+  // The menu bar has always gated this on nativeStatus (swiftbar.ts). The
+  // widget did not, so a project that stopped an hour ago sat there showing
+  // `Bash: cd …` as though it were mid-command.
+  const activeLive = evalFn(widget(), 'activeLive') as (p: unknown) => unknown
+  const live = { toolName: 'Bash', summary: 'npm test' }
+  assert.deepEqual(
+    activeLive({ aggregateStatus: 'busy', sessions: [{ nativeStatus: 'busy', live }] }),
+    live,
+  )
+  for (const stopped of ['idle', 'ended', 'crashed', null]) {
+    assert.equal(
+      activeLive({ aggregateStatus: stopped, sessions: [{ nativeStatus: 'busy', live }] }),
+      null,
+      `狀態 ${stopped} 不該顯示動作`,
+    )
+  }
+})
+
+test('專案在跑但那個 session 已經不在跑時，不拿它的 live 來充數', () => {
+  const activeLive = evalFn(widget(), 'activeLive') as (p: unknown) => unknown
+  const stale = { toolName: 'Bash', summary: '很久以前' }
+  const now = { toolName: 'Read', summary: '現在' }
+  assert.equal(
+    activeLive({
+      aggregateStatus: 'busy',
+      sessions: [{ nativeStatus: 'idle', live: stale }, { nativeStatus: 'busy', live: now }],
+    }),
+    now,
+  )
+})
+
+test('沒有 sessions 欄位時不炸掉', () => {
+  const activeLive = evalFn(widget(), 'activeLive') as (p: unknown) => unknown
+  assert.equal(activeLive({ aggregateStatus: 'busy' }), null)
+})
