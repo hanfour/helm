@@ -89,10 +89,23 @@ function titleOf(projects) {
 // aggregateStatus 當閘門會更嚴：只要同一個專案裡有東西中斷，
 // 正在跑的那道指令就被藏起來 —— 而那正是最該看到的時候。
 function activeLive(p) {
-  const running = (p.sessions || []).find(
-    (s) => s.nativeStatus === 'busy' && s.live && s.live.summary,
-  )
+  // 只要有 live 就算數。之前要求 summary 非空，於是一個寫到一半的 marker、
+  // 或一個沒有東西可摘要的工具，桌面就完全不顯示 —— 選單列在同樣情況
+  // 顯示的是「→ Read」。
+  const running = (p.sessions || []).find((s) => s.nativeStatus === 'busy' && s.live)
   return running ? running.live : null
+}
+
+// 選單列在信心低時畫的是 ●? —— 猜測要看得出來是猜測。
+function isUncertain(p) {
+  return (p.sessions || []).some(
+    (s) => s.lifecycleConfidence === 'low' && (s.lifecycle === 'crashed' || s.lifecycle === 'ended_clean'),
+  )
+}
+
+function liveTextOf(live) {
+  if (!live) return null
+  return live.summary ? live.toolName + ': ' + live.summary : live.toolName || null
 }
 
 // Math.floor，跟選單列的 relativeTime 一樣。用 Math.round 的話
@@ -118,13 +131,14 @@ function notesOf(board) {
 }
 
 function rowOf(p, nowMs) {
-  const live = activeLive(p)
   return {
     key: p.path || p.name,
     name: p.name,
     dot: dotOf(p.aggregateStatus),
+    uncertain: isUncertain(p),
+    pin: p.pinned ? '📌' : '',
     when: ago(p.lastActivityMs, nowMs),
-    live: live ? live.toolName + ': ' + live.summary : null,
+    live: liveTextOf(activeLive(p)),
   }
 }
 
@@ -277,8 +291,8 @@ export const render = ({ output, error }) => {
       {view.rows.map((r) => (
         <div key={r.key} style={{ marginTop: '6px' }}>
           <div style={row}>
-            <span style={{ color: r.dot || 'transparent' }}>●</span>
-            <span style={{ flex: 1, ...clip }}>{r.name}</span>
+            <span style={{ color: r.dot || 'transparent' }}>{r.uncertain ? '◍' : '●'}</span>
+            <span style={{ flex: 1, ...clip }}>{r.pin}{r.pin ? ' ' : ''}{r.name}</span>
             <span style={dim}>{r.when}</span>
           </div>
           {r.live ? <div style={{ ...dim, ...clip, paddingLeft: '14px' }}>{r.live}</div> : null}

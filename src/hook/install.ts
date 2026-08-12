@@ -175,7 +175,13 @@ function apply(
   const entryRaw = join(deps.repoRoot, 'src/cli/main.ts')
   const entry = shellQuote(entryRaw)
   const wrapper = wrapperPath(paths)
-  const wrapperOk = writeOurScript(wrapper, `#!/bin/sh\n${nodeInvocation(nodeBin)}\nexec "$NODE" ${entry} "$@"\n`)
+  // `--no-warnings` is not only about speed here. Übersicht turns any byte on
+  // stderr into an HTTP 500 and draws the result as an error, even when the
+  // JSON on stdout is complete — so one future Node deprecation notice would
+  // replace the whole desktop board with a message about a deprecation.
+  const wrapperOk = writeOurScript(
+    wrapper, `#!/bin/sh\n${nodeInvocation(nodeBin)}\nexec "$NODE" --no-warnings ${entry} "$@"\n`,
+  )
   if (wrapperOk) steps.push(`已安裝 ${wrapper}`)
   else if (isSymlink(wrapper)) warnings.push(refusedSymlink(wrapper))
   else warnings.push(`${wrapper} 已經存在且不是 helm 寫的（Kubernetes 的 helm 也叫這個名字），未覆寫。想用 helm 指令請自行改名或換一個位置。`)
@@ -278,9 +284,21 @@ function installWidget(
   const widget = join(scan.dir, WIDGET_NAME)
   // Same fallback as the SwiftBar plugin: when ~/.local/bin/helm belongs to
   // somebody else, call the entry point directly rather than draw nothing.
+  // The wrapper carries the `[ -x "$NODE" ] || NODE=node` fallback, so going
+  // through it is also the way the widget survives a Node upgrade. Without a
+  // wrapper there is nowhere to put a fallback in a single argv, so helm
+  // writes a tiny shim of its own next to the widget rather than pinning an
+  // absolute path with no way out.
+  const shim = join(paths.helmHome, 'run-helm.sh')
   const argv = invocation.wrapperOk
     ? [invocation.wrapper, 'status', '--json']
-    : [invocation.nodeBin, invocation.entryRaw, 'status', '--json']
+    : writeOurScript(
+      shim,
+      `#!/bin/sh\n${nodeInvocation(invocation.nodeBin)}\n`
+      + `exec "$NODE" --no-warnings ${shellQuote(invocation.entryRaw)} "$@"\n`,
+    )
+      ? [shim, 'status', '--json']
+      : [invocation.nodeBin, invocation.entryRaw, 'status', '--json']
   // 0644, not 0755: a widget is a module Übersicht imports, not a program it
   // runs, and an executable bit here would only be noise.
   if (writeOurFile(widget, stamped(buildWidget(argv), '//'), 0o644)) {

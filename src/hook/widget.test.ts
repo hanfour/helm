@@ -172,7 +172,10 @@ test('只有那個 session 自己在跑才顯示動作 —— 跟選單列同一
     'Bash: npm test',
     '同一專案裡有東西中斷時，正在跑的那道指令更該看得到',
   )
-  assert.equal(one([{ nativeStatus: 'busy', live: { toolName: 'Bash' } }]), null, '沒有 summary 就不畫')
+  // 選單列在 summary 為空時顯示「→ Read」，所以桌面也顯示工具名。
+  // 這裡要擋的是 `Bash: undefined`，不是整行不畫。
+  assert.equal(one([{ nativeStatus: 'busy', live: { toolName: 'Bash' } }]), 'Bash')
+  assert.equal(one([{ nativeStatus: 'busy', live: { toolName: '', summary: '' } }]), null)
   assert.equal(one([]), null)
 })
 
@@ -282,4 +285,35 @@ test('拖曳只認左鍵，而且放開之後不留下監聽器', () => {
     if (had) g.document = previous
     else delete g.document
   }
+})
+
+test('釘選的專案帶著 📌 —— 選單列一直有畫', () => {
+  const rows = (view(board({ projects: [proj({ pinned: true }), proj({ name: 'b', pinned: false })] })) as
+    unknown as { rows: { pin: string }[] }).rows
+  assert.equal(rows[0]?.pin, '📌')
+  assert.equal(rows[1]?.pin, '')
+})
+
+test('低信心的狀態要標出來，不能把猜測畫成確定', () => {
+  // The menu bar draws `●? 已中斷` when lifecycleConfidence is low. The widget
+  // drew a solid red dot either way — a guess presented as a fact.
+  const low = { nativeStatus: 'idle', lifecycle: 'crashed', lifecycleConfidence: 'low' }
+  const high = { nativeStatus: 'idle', lifecycle: 'crashed', lifecycleConfidence: 'high' }
+  const uncertainOf = (sessions: unknown[]) =>
+    (view(board({ projects: [proj({ aggregateStatus: 'crashed', sessions })] })) as
+      unknown as { rows: { uncertain: boolean }[] }).rows[0]?.uncertain
+  assert.equal(uncertainOf([low]), true)
+  assert.equal(uncertainOf([high]), false)
+})
+
+test('live 只有工具名沒有摘要時仍顯示工具名 —— 選單列顯示 → Read', () => {
+  // The widget required `live.summary` to be truthy, so a marker written
+  // mid-flight, or a tool with nothing to summarise, showed nothing at all.
+  const rows = (view(board({
+    projects: [proj({
+      aggregateStatus: 'busy',
+      sessions: [{ nativeStatus: 'busy', live: { toolName: 'Read', summary: '' } }],
+    })],
+  })) as unknown as { rows: { live: string | null }[] }).rows
+  assert.equal(rows[0]?.live, 'Read')
 })

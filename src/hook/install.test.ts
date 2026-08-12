@@ -82,7 +82,7 @@ test('安裝會寫出可執行的 helm wrapper', () => {
   const h = home({})
   installHook(resolvePaths({ home: h }), DEPS)
   const wrapper = join(h, '.local', 'bin', 'helm')
-  assert.match(readFileSync(wrapper, 'utf8'), /exec "\$NODE" '\/repo\/src\/cli\/main\.ts' "\$@"/)
+  assert.match(readFileSync(wrapper, 'utf8'), /exec "\$NODE" --no-warnings '\/repo\/src\/cli\/main\.ts' "\$@"/)
   assert.ok((statSync(wrapper).mode & 0o111) !== 0, 'wrapper 必須可執行')
 })
 
@@ -437,7 +437,7 @@ test('沒裝 Übersicht 時給出安裝指引，而不是默默跳過', () => {
   )
 })
 
-test('別人的 helm 佔住 wrapper 時，widget 改為直接呼叫 node', () => {
+test('別人的 helm 佔住 wrapper 時，widget 改走 helm 自己的 shim', () => {
   const h = home({})
   const wrapper = join(h, '.local', 'bin', 'helm')
   mkdirSync(dirname(wrapper), { recursive: true })
@@ -448,7 +448,7 @@ test('別人的 helm 佔住 wrapper 時，widget 改為直接呼叫 node', () =>
     join(h, 'Library', 'Application Support', 'Übersicht', 'widgets', 'helm.jsx'), 'utf8',
   )
   assert.ok(!widget.includes(wrapper), '不該指向別人的 helm')
-  assert.ok(widget.includes('/repo/src/cli/main.ts'))
+  assert.ok(widget.includes(join(h, '.helm', 'run-helm.sh')), widget.slice(0, 300))
 })
 
 test('uninstall 刪得掉自己寫的 widget，但不碰別人的', () => {
@@ -751,4 +751,38 @@ test('SwiftBar 那一半失敗時，Übersicht 仍然裝得起來 —— 兩者�
   } finally {
     chmodSync(pluginDir, 0o700)
   }
+})
+
+test('wrapper 走 --no-warnings —— 任何一個 byte 的 stderr 都會讓桌面變成錯誤卡片', () => {
+  // Übersicht's server sets HTTP 500 the moment the child writes anything to
+  // stderr, and the client turns that into `render({error})` — even when the
+  // JSON on stdout is complete. The hook already passes --no-warnings for
+  // speed; the wrapper needs it so a future Node deprecation notice does not
+  // replace the whole desktop board with an error message.
+  const h = home({})
+  installHook(resolvePaths({ home: h }), DEPS)
+  const body = readFileSync(join(h, '.local', 'bin', 'helm'), 'utf8')
+  assert.match(body, /--no-warnings/, body)
+})
+
+test('widget 的 fallback 也有 PATH 退路 —— 註解說跟 plugin 相同就要真的相同', () => {
+  // The plugin's fallback goes through `nodeInvocation()` and keeps
+  // `[ -x "$NODE" ] || NODE=node`; the widget's argv pinned the absolute path
+  // with no way out. After a version manager removes the old image the menu
+  // bar recovers and the desktop does not.
+  const h = home({})
+  const wrapper = join(h, '.local', 'bin', 'helm')
+  mkdirSync(dirname(wrapper), { recursive: true })
+  writeFileSync(wrapper, '#!/bin/sh\necho "Kubernetes Helm v3.16.2"\n')
+  const report = installHook(resolvePaths({ home: h }), {
+    ...DEPS, ubersichtInstalled: true, ubersicht: fakePrefs(),
+  })
+  const widget = readFileSync(
+    join(h, 'Library', 'Application Support', 'Übersicht', 'widgets', 'helm.jsx'), 'utf8',
+  )
+  assert.ok(!widget.includes(wrapper), report.warnings.join('\n'))
+  const shim = join(h, '.helm', 'run-helm.sh')
+  assert.ok(widget.includes(shim), `widget 應該指向 shim：${widget.slice(0, 300)}`)
+  assert.match(readFileSync(shim, 'utf8'), /^\[ -x "\$NODE" \] \|\| NODE=node$/m, 'shim 要帶退路')
+  assert.match(readFileSync(shim, 'utf8'), /--no-warnings/)
 })
