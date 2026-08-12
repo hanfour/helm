@@ -75,8 +75,18 @@ Unknown JSON field: "reviewDecision"
 | `APPROVED` 且 checks 全過 | 可合併 |
 | `isDraft` | 草稿（不催任何人） |
 
-- [ ] 測試：四種狀態各一、`SKIPPED` 不算失敗、空的 `statusCheckRollup`（沒有 CI 的 repo）不該被當成「等 CI」、草稿優先於一切
-- [ ] 紅 → 實作 → 綠 → commit
+- [x] 測試：四種狀態各一、`SKIPPED` 不算失敗、空的 `statusCheckRollup`（沒有 CI 的 repo）不該被當成「等 CI」、草稿優先於一切
+- [x] 紅 → 實作 → 綠 → commit
+- [x] **真實資料驗證**——`cli/cli` 的 12 個 PR：6 草稿 / 5 等人審 / 1 等你改。`SKIPPED` 沒有被誤判成等 CI
+
+**實作時補進去的三件事**（測試都先紅過）：
+
+- `SKIPPED` 與 `NEUTRAL` 不算失敗。GitHub Actions 的條件式 job 大量產生
+  `SKIPPED`，當成失敗的話幾乎每個 PR 都會顯示「等 CI」——真實樣本裡 12 個
+  PR 全部都有 SKIPPED。
+- `CANCELLED` / `TIMED_OUT` / `ACTION_REQUIRED` / `STARTUP_FAILURE` / `STALE`
+  算失敗，那些都是需要人去看的狀態。
+- 認不得的 `reviewDecision`（`gh` 明天可能多回一個值）當成「還沒審」，不猜。
 
 ### Task 2：`gh` 的兩個查詢與四種降級
 
