@@ -261,3 +261,28 @@ test('hook 錯誤紀錄的說明要講出檔案在哪、以及可以清掉', () 
   assert.match(c?.detail ?? '', /hook-errors\.log/)
   assert.match(c?.detail ?? '', /清/)
 })
+
+test('SwiftBar plugin 沒有執行權限時檢查不通過 —— SwiftBar 不會跑它', () => {
+  const h = home()
+  const dir = join(h, 'Library', 'Application Support', 'SwiftBar')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'helm.5s.sh'), '#!/bin/sh\n')
+  chmodSync(join(dir, 'helm.5s.sh'), 0o644)
+  const c = find(runChecks(resolvePaths({ home: h }), board()), 'SwiftBar')
+  // SwiftBar 本身未安裝時這一項本來就不通過，所以只在有裝的機器上才有意義。
+  if (existsSync('/Applications/SwiftBar.app')) {
+    assert.equal(c?.ok, false)
+    assert.match(c?.detail ?? '', /執行權限/)
+  }
+})
+
+test('已經不存在的檔案不計入「順手清掉 N 個」', () => {
+  // rmSync 帶 force 對不存在的檔案也不報錯，用呼叫次數當計數會灌水。
+  const h = home()
+  const live = join(h, '.helm', 'live')
+  mkdirSync(live, { recursive: true })
+  mkdirSync(join(live, 'a-directory.json'))
+  const old = (NOW - 31 * DAY) / 1000
+  utimesSync(join(live, 'a-directory.json'), old, old)
+  assert.deepEqual(sweepStaleLive(resolvePaths({ home: h }), board(), NOW), [])
+})

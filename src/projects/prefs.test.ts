@@ -113,3 +113,16 @@ test('未來版本的 prefs 同樣被保留下來，不當成空檔覆蓋', () =
   assert.equal(out.health, 'quarantined')
   assert.equal(existsSync(f.replace(/\.json$/, '.corrupt.json')), true)
 })
+
+test('第二次毀損不會蓋掉第一次隔離的證據', () => {
+  const f = tmpFile('{第一次壞掉')
+  readPrefs(f)
+  writeFileSync(f, '{第二次壞掉')
+  readPrefs(f)
+  const dir = dirname(f)
+  const quarantined = readdirSync(dir).filter((n) => n.includes('.corrupt.json'))
+  assert.equal(quarantined.length, 2, '兩份證據都要留著')
+  const bodies = quarantined.map((n) => readFileSync(join(dir, n), 'utf8'))
+  assert.ok(bodies.includes('{第一次壞掉'))
+  assert.ok(bodies.includes('{第二次壞掉'))
+})

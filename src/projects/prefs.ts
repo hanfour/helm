@@ -60,8 +60,12 @@ export function readPrefs(prefsFile: string): PrefsRead {
  * the one where silence costs the user everything they ever pinned or hid.
  */
 function quarantine(prefsFile: string): boolean {
+  const target = quarantinePath(prefsFile)
   try {
-    renameSync(prefsFile, quarantinePath(prefsFile))
+    // A second corruption must not overwrite the evidence from the first.
+    // `renameSync` clobbers silently, and this is the only surviving copy of
+    // something that cannot be rebuilt.
+    renameSync(prefsFile, existsSync(target) ? `${target}.${Date.now()}` : target)
     return true
   } catch {
     // The caller is told `unreadable` and must refuse to write.

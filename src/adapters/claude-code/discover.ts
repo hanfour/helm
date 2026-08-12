@@ -43,12 +43,13 @@ export interface DiscoverDeps {
  *   - The registry is the live fact. Only it knows the PID, the process start
  *     time, and whether the session is busy or waiting for input.
  *
- * Fast path rules still hold: never read a transcript's contents, never spawn
- * a subprocess. `helm menu` calls this every five seconds (spec §5.1).
+ * Fast path rules still hold here: never read a transcript's contents, never
+ * spawn a subprocess. `helm menu` calls this every five seconds (spec §5.1).
  *
- * Liveness deliberately does NOT belong here. Reconciliation needs one `ps`
- * result for the whole session set, so `collectStatus` makes that single call
- * and passes it down.
+ * Liveness deliberately does NOT belong here — but note that `collectStatus`,
+ * one layer up, *does* spawn `ps`, and that spawn is the most expensive thing
+ * on the whole fast path (measured: 13 ms of `helm menu`'s ~130 ms). The rule
+ * above is about this module, not about the path as a whole.
  */
 export function discoverClaudeCode(
   paths: HelmPaths,

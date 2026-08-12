@@ -170,8 +170,17 @@ function swiftbar(paths: HelmPaths): Check {
     }
   }
   const plugin = join(paths.home, 'Library', 'Application Support', 'SwiftBar', PLUGIN_NAME)
-  const ok = existsSync(plugin)
-  return { name: 'SwiftBar', ok, detail: ok ? plugin : 'plugin 未安裝，執行 helm install。' }
+  if (!existsSync(plugin)) {
+    return { name: 'SwiftBar', ok: false, detail: 'plugin 未安裝，執行 helm install。' }
+  }
+  // SwiftBar only runs plugins with the executable bit set, and a plugin that
+  // lost it fails silently — the menu bar simply shows nothing.
+  const executable = canAccess(plugin, constants.X_OK)
+  return {
+    name: 'SwiftBar',
+    ok: executable,
+    detail: executable ? plugin : `${plugin} 沒有執行權限，SwiftBar 不會跑它。chmod +x 或重跑 helm install。`,
+  }
 }
 
 /**
@@ -213,10 +222,16 @@ function ageOf(file: string, nowMs: number): number {
   }
 }
 
+/**
+ * Reports what actually went away. `rmSync` with `force` never errors, so
+ * counting its calls would inflate "swept N files" with entries that were
+ * already gone — or with ones it silently failed to touch, like a directory
+ * that happens to end in .json.
+ */
 function removeQuietly(file: string): boolean {
   try {
     rmSync(file, { force: true })
-    return true
+    return !existsSync(file)
   } catch {
     // Cleanup is off the critical path. A file we cannot delete is reported as
     // "not deleted" and retried next time, never escalated to the user.
