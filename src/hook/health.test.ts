@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { resolvePaths } from '../paths.ts'
 import { runChecks, sweepStaleLive, type Check } from './health.ts'
-import type { SwiftBarDeps } from './swiftbar.ts'
+import type { CheckDeps } from './health.ts'
 import type { Board } from '../board.ts'
 import type { SessionState } from '../types.ts'
 
@@ -43,10 +43,22 @@ function home(): string {
 const marker = (sessionId: string) =>
   JSON.stringify({ sessionId, ts: 0, toolName: 'Bash', summary: 'x' })
 
-const noSwiftBarPref: SwiftBarDeps = { readPref: () => null, writePref: () => {} }
+const noPref = { readPref: () => null, writePref: () => {} }
 
-const checksOf = (home: string, b = board(), sb: SwiftBarDeps = noSwiftBarPref) =>
-  runChecks(resolvePaths({ home }), b, sb)
+/**
+ * Both apps are reported as installed by default, and never probed for real.
+ * Reading /Applications made every menu-bar and desktop assertion conditional
+ * on the machine running the suite — which is to say, on a CI box they
+ * asserted nothing at all.
+ */
+const checksOf = (home: string, b = board(), extra: CheckDeps = {}) =>
+  runChecks(resolvePaths({ home }), b, {
+    swiftbar: noPref,
+    ubersicht: noPref,
+    swiftbarInstalled: true,
+    ubersichtInstalled: true,
+    ...extra,
+  })
 
 const find = (checks: readonly Check[], name: string) =>
   checks.find((c) => c.name.includes(name))
@@ -275,11 +287,42 @@ test('SwiftBar plugin 沒有執行權限時檢查不通過 —— SwiftBar 不�
   writeFileSync(join(dir, 'helm.5s.sh'), '#!/bin/sh\n')
   chmodSync(join(dir, 'helm.5s.sh'), 0o644)
   const c = find(checksOf(h, board()), 'SwiftBar')
-  // SwiftBar 本身未安裝時這一項本來就不通過，所以只在有裝的機器上才有意義。
-  if (existsSync('/Applications/SwiftBar.app')) {
-    assert.equal(c?.ok, false)
-    assert.match(c?.detail ?? '', /執行權限/)
-  }
+  assert.equal(c?.ok, false)
+  assert.match(c?.detail ?? '', /執行權限/)
+})
+
+test('SwiftBar 沒裝時檢查不通過，並給出安裝指令', () => {
+  const c = find(checksOf(home(), board(), { swiftbarInstalled: false }), 'SwiftBar')
+  assert.equal(c?.ok, false)
+  assert.match(c?.detail ?? '', /brew install --cask swiftbar/)
+})
+
+test('Übersicht 沒裝時檢查不通過，並給出安裝指令', () => {
+  const c = find(checksOf(home(), board(), { ubersichtInstalled: false }), 'Übersicht')
+  assert.equal(c?.ok, false)
+  assert.match(c?.detail ?? '', /brew install --cask ubersicht/)
+})
+
+test('widget 不在 Übersicht 掃描的資料夾裡時檢查不通過，並說出它掃的是哪一個', () => {
+  // The exact dead end helm keeps producing: file written, checks green,
+  // and nothing on screen because the app is looking somewhere else.
+  const h = home()
+  const elsewhere = join(h, 'somewhere-else')
+  const c = find(
+    checksOf(h, board(), { ubersicht: { readPref: () => elsewhere, writePref: () => {} } }),
+    'Übersicht',
+  )
+  assert.equal(c?.ok, false)
+  assert.ok(c?.detail.includes(elsewhere), c?.detail)
+})
+
+test('widget 在正確的資料夾裡時檢查通過', () => {
+  const h = home()
+  const dir = join(h, 'Library', 'Application Support', 'Übersicht', 'widgets')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'helm.jsx'), '// HELM_LIVE_MARKER\n')
+  const c = find(checksOf(h, board()), 'Übersicht')
+  assert.equal(c?.ok, true, c?.detail)
 })
 
 test('已經不存在的檔案不計入「順手清掉 N 個」', () => {

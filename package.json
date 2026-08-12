@@ -6,8 +6,8 @@
   "bin": { "helm": "./src/cli/main.ts" },
   "engines": { "node": ">=24.0.0" },
   "scripts": {
-    "test": "node --test \"src/**/*.test.ts\"",
-    "test:cov": "node --test --experimental-test-coverage \"src/**/*.test.ts\"",
+    "test": "HELM_NO_REAL_PREFS=1 node --test \"src/**/*.test.ts\"",
+    "test:cov": "HELM_NO_REAL_PREFS=1 node --test --experimental-test-coverage \"src/**/*.test.ts\"",
     "typecheck": "tsc --noEmit",
     "check": "bash scripts/check.sh"
   },

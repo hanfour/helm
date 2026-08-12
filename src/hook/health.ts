@@ -10,10 +10,13 @@ import { hasHelmHook } from './settings.ts'
 import {
   defaultSwiftBarDeps, PLUGIN_NAME, scannedPluginDir, type SwiftBarDeps,
 } from './swiftbar.ts'
+import { defaultUbersichtDeps, scannedWidgetDir, type UbersichtDeps } from './ubersicht.ts'
+import { WIDGET_NAME } from './widget.ts'
 
 const ORPHAN_MAX_AGE_MS = 30 * 86_400_000
 const ERROR_TAIL_LINES = 5
 const SWIFTBAR_APP = '/Applications/SwiftBar.app'
+const UBERSICHT_APP = '/Applications/Übersicht.app'
 
 export interface Check {
   name: string
@@ -22,11 +25,22 @@ export interface Check {
   detail: string
 }
 
-export function runChecks(
-  paths: HelmPaths,
-  board: Board,
-  swiftbarDeps: SwiftBarDeps = defaultSwiftBarDeps(),
-): Check[] {
+/**
+ * Everything about the two GUI apps that a test needs to control.
+ *
+ * `*Installed` is injected rather than probed because reading /Applications
+ * made each check pass or fail according to what happened to be on the machine
+ * running the suite — so on a CI box, the menu-bar and desktop assertions
+ * quietly asserted nothing.
+ */
+export interface CheckDeps {
+  swiftbar?: SwiftBarDeps
+  ubersicht?: UbersichtDeps
+  swiftbarInstalled?: boolean
+  ubersichtInstalled?: boolean
+}
+
+export function runChecks(paths: HelmPaths, board: Board, deps: CheckDeps = {}): Check[] {
   return [
     hookInstalled(paths),
     hookErrors(paths),
@@ -35,7 +49,8 @@ export function runChecks(
     dataSources(paths),
     registryParse(paths, board),
     prefsHealth(paths, board),
-    swiftbar(paths, swiftbarDeps),
+    swiftbar(paths, deps.swiftbar ?? defaultSwiftBarDeps(), deps.swiftbarInstalled ?? existsSync(SWIFTBAR_APP)),
+    ubersicht(paths, deps.ubersicht ?? defaultUbersichtDeps(), deps.ubersichtInstalled ?? existsSync(UBERSICHT_APP)),
   ]
 }
 
@@ -167,8 +182,8 @@ function prefsHealth(paths: HelmPaths, board: Board): Check {
   }
 }
 
-function swiftbar(paths: HelmPaths, deps: SwiftBarDeps): Check {
-  if (!existsSync(SWIFTBAR_APP)) {
+function swiftbar(paths: HelmPaths, deps: SwiftBarDeps, installed: boolean): Check {
+  if (!installed) {
     return {
       name: 'SwiftBar',
       ok: false,
@@ -195,6 +210,31 @@ function swiftbar(paths: HelmPaths, deps: SwiftBarDeps): Check {
     ok: executable,
     detail: executable ? plugin : `${plugin} 沒有執行權限，SwiftBar 不會跑它。chmod +x 或重跑 helm install。`,
   }
+}
+
+/**
+ * The desktop half. Same failure mode as SwiftBar and checked the same way:
+ * against the folder Übersicht actually scans, because a widget written
+ * anywhere else leaves every check green and the wallpaper bare.
+ */
+function ubersicht(paths: HelmPaths, deps: UbersichtDeps, installed: boolean): Check {
+  if (!installed) {
+    return {
+      name: 'Übersicht',
+      ok: false,
+      detail: '未安裝，桌面看板無法運作。brew install --cask ubersicht，裝好後執行 helm install。',
+    }
+  }
+  const dir = scannedWidgetDir(paths, deps)
+  const widget = join(dir, WIDGET_NAME)
+  if (!existsSync(widget)) {
+    return {
+      name: 'Übersicht',
+      ok: false,
+      detail: `Übersicht 掃描的是 ${dir}，裡面沒有 helm 的 widget。執行 helm install。`,
+    }
+  }
+  return { name: 'Übersicht', ok: true, detail: widget }
 }
 
 /**

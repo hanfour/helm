@@ -386,3 +386,95 @@ test('在精簡 PATH 下 wrapper 仍然跑得起來', () => {
   })
   assert.match(out, /helm —/)
 })
+
+const fakeUbersicht = (initial: Record<string, string> = {}) => {
+  const store = { ...initial }
+  return {
+    store,
+    deps: {
+      readPref: (k: string) => store[k] ?? null,
+      writePref: (k: string, v: string) => {
+        store[k] = v
+      },
+    },
+  }
+}
+
+const UB = (extra: object = {}) => ({ ...DEPS, ubersichtInstalled: true, ...extra })
+
+test('裝了 Übersicht 就寫出桌面 widget', () => {
+  const h = home({})
+  const ub = fakeUbersicht()
+  const report = installHook(resolvePaths({ home: h }), UB({ ubersicht: ub.deps }))
+  const widget = join(h, 'Library', 'Application Support', 'Übersicht', 'widgets', 'helm.jsx')
+  assert.equal(existsSync(widget), true, report.warnings.join('\n'))
+  assert.match(readFileSync(widget, 'utf8'), /export const command = /)
+})
+
+test('widget 走 wrapper 的絕對路徑 —— Übersicht 的 PATH 一樣很精簡', () => {
+  const h = home({})
+  const ub = fakeUbersicht()
+  installHook(resolvePaths({ home: h }), UB({ ubersicht: ub.deps }))
+  const widget = readFileSync(
+    join(h, 'Library', 'Application Support', 'Übersicht', 'widgets', 'helm.jsx'), 'utf8',
+  )
+  assert.ok(widget.includes(join(h, '.local', 'bin', 'helm')))
+})
+
+test('Übersicht 已經指定過 widget 資料夾時，裝進它掃描的那一個', () => {
+  const h = home({})
+  const mine = join(h, 'my-widgets')
+  const ub = fakeUbersicht({ widgetDir: mine })
+  installHook(resolvePaths({ home: h }), UB({ ubersicht: ub.deps }))
+  assert.equal(existsSync(join(mine, 'helm.jsx')), true)
+  assert.equal(ub.store['widgetDir'], mine, '使用者選過的資料夾不該被改掉')
+})
+
+test('沒裝 Übersicht 時給出安裝指引，而不是默默跳過', () => {
+  const h = home({})
+  const report = installHook(resolvePaths({ home: h }), { ...DEPS, ubersichtInstalled: false })
+  assert.ok(
+    report.warnings.some((w) => w.includes('Übersicht') && w.includes('brew')),
+    report.warnings.join('\n'),
+  )
+})
+
+test('別人的 helm 佔住 wrapper 時，widget 改為直接呼叫 node', () => {
+  const h = home({})
+  const wrapper = join(h, '.local', 'bin', 'helm')
+  mkdirSync(dirname(wrapper), { recursive: true })
+  writeFileSync(wrapper, '#!/bin/sh\necho "Kubernetes Helm v3.16.2"\n')
+  const ub = fakeUbersicht()
+  installHook(resolvePaths({ home: h }), UB({ ubersicht: ub.deps }))
+  const widget = readFileSync(
+    join(h, 'Library', 'Application Support', 'Übersicht', 'widgets', 'helm.jsx'), 'utf8',
+  )
+  assert.ok(!widget.includes(wrapper), '不該指向別人的 helm')
+  assert.ok(widget.includes('/repo/src/cli/main.ts'))
+})
+
+test('uninstall 刪得掉自己寫的 widget，但不碰別人的', () => {
+  const h = home({})
+  const ub = fakeUbersicht()
+  const paths = resolvePaths({ home: h })
+  const dir = join(h, 'Library', 'Application Support', 'Übersicht', 'widgets')
+  installHook(paths, UB({ ubersicht: ub.deps }))
+  assert.equal(existsSync(join(dir, 'helm.jsx')), true)
+
+  const theirs = join(dir, 'weather.jsx')
+  writeFileSync(theirs, 'export const command = "date"\n')
+  uninstallHook(paths, UB({ ubersicht: ub.deps }))
+  assert.equal(existsSync(join(dir, 'helm.jsx')), false)
+  assert.equal(existsSync(theirs), true, '別人的 widget 不該被刪')
+})
+
+test('widget 已存在且不是 helm 寫的就不覆寫', () => {
+  const h = home({})
+  const dir = join(h, 'Library', 'Application Support', 'Übersicht', 'widgets')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'helm.jsx'), 'export const command = "my own thing"\n')
+  const ub = fakeUbersicht()
+  const report = installHook(resolvePaths({ home: h }), UB({ ubersicht: ub.deps }))
+  assert.match(readFileSync(join(dir, 'helm.jsx'), 'utf8'), /my own thing/)
+  assert.ok(report.warnings.some((w) => w.includes('helm.jsx')), report.warnings.join('\n'))
+})

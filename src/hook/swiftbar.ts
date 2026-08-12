@@ -1,6 +1,6 @@
-import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import type { HelmPaths } from '../paths.ts'
+import { prefsFor, type PrefsIO } from './defaults.ts'
 
 const BUNDLE_ID = 'com.ameba.SwiftBar'
 
@@ -9,13 +9,10 @@ const PLUGIN_DIR_KEY = 'PluginDirectory'
 
 export const PLUGIN_NAME = 'helm.5s.sh'
 
-export interface SwiftBarDeps {
-  readPref: (key: string) => string | null
-  writePref: (key: string, value: string) => void
-}
+export type SwiftBarDeps = PrefsIO
 
 export function defaultSwiftBarDeps(): SwiftBarDeps {
-  return { readPref, writePref }
+  return prefsFor(BUNDLE_ID)
 }
 
 /**
@@ -51,24 +48,4 @@ export function adoptPluginDir(dir: string, deps: SwiftBarDeps): boolean {
   if (deps.readPref(PLUGIN_DIR_KEY) !== null) return false
   deps.writePref(PLUGIN_DIR_KEY, dir)
   return true
-}
-
-function readPref(key: string): string | null {
-  try {
-    const out = execFileSync('defaults', ['read', BUNDLE_ID, key], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim()
-    return out === '' ? null : out
-  } catch {
-    // `defaults` exits non-zero when the domain or key does not exist, which
-    // is the normal state before SwiftBar has ever been configured.
-    return null
-  }
-}
-
-function writePref(key: string, value: string): void {
-  execFileSync('defaults', ['write', BUNDLE_ID, key, '-string', value], {
-    stdio: ['ignore', 'ignore', 'pipe'],
-  })
 }

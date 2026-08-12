@@ -9,8 +9,13 @@ import { buildHookCommand, HOOK_MARKER, shellQuote } from './snippet.ts'
 import {
   adoptPluginDir, defaultSwiftBarDeps, PLUGIN_NAME, scannedPluginDir, type SwiftBarDeps,
 } from './swiftbar.ts'
+import {
+  adoptWidgetDir, defaultUbersichtDeps, scannedWidgetDir, type UbersichtDeps,
+} from './ubersicht.ts'
+import { buildWidget, WIDGET_MARKER, WIDGET_NAME } from './widget.ts'
 
 const SWIFTBAR_APP = '/Applications/SwiftBar.app'
+const UBERSICHT_APP = '/Applications/Übersicht.app'
 
 /**
  * Written into every script helm generates, so uninstall can tell its own
@@ -20,6 +25,9 @@ const SWIFTBAR_APP = '/Applications/SwiftBar.app'
  */
 const SCRIPT_MARKER = `# ${HOOK_MARKER}`
 
+/** The same marker as a JS comment: an Übersicht widget is an ES module. */
+const WIDGET_COMMENT = `// ${WIDGET_MARKER}`
+
 export interface InstallDeps {
   now: () => number
   repoRoot: string
@@ -28,6 +36,9 @@ export interface InstallDeps {
   /** Injected so the SwiftBar branches are testable on any machine. */
   swiftbarInstalled?: boolean
   swiftbar?: SwiftBarDeps
+  /** Likewise for the desktop widget. */
+  ubersichtInstalled?: boolean
+  ubersicht?: UbersichtDeps
 }
 
 export interface InstallReport {
@@ -115,7 +126,8 @@ function apply(
   writeJsonAtomic(paths.claudeSettings, updated)
   steps.push(`已把 hook 加進 ${paths.claudeSettings}（其餘設定未動）`)
 
-  const entry = shellQuote(join(deps.repoRoot, 'src/cli/main.ts'))
+  const entryRaw = join(deps.repoRoot, 'src/cli/main.ts')
+  const entry = shellQuote(entryRaw)
   const nodeBin = deps.nodeBin ?? process.execPath
   const wrapper = wrapperPath(paths)
   const wrapperOk = writeOurScript(wrapper, `#!/bin/sh\n${nodeInvocation(nodeBin)}\nexec "$NODE" ${entry} "$@"\n`)
@@ -150,10 +162,56 @@ function apply(
     warnings.push('找不到 SwiftBar，選單列看板尚未啟用。安裝方式：brew install --cask swiftbar，裝好後重跑 helm install。')
   }
 
+  installWidget(paths, deps, { wrapper, wrapperOk, entryRaw, nodeBin }, steps, warnings)
+
   if (!onPath(dirname(wrapper))) {
     warnings.push(`${dirname(wrapper)} 不在 PATH 上，直接打 helm 會找不到。把它加進 shell 設定即可。`)
   }
   warnings.push('hook 要等下一個 Claude Code session 啟動才會生效。')
+}
+
+interface Invocation {
+  wrapper: string
+  wrapperOk: boolean
+  /** Unquoted. The widget quotes every argument itself. */
+  entryRaw: string
+  nodeBin: string
+}
+
+/**
+ * The desktop half of the board, for people who never find a menu bar item
+ * among twenty others. Übersicht draws a shell command's output straight onto
+ * the wallpaper, which is exactly the shape helm already produces.
+ */
+function installWidget(
+  paths: HelmPaths,
+  deps: InstallDeps,
+  invocation: Invocation,
+  steps: string[],
+  warnings: string[],
+): void {
+  if (!(deps.ubersichtInstalled ?? existsSync(UBERSICHT_APP))) {
+    warnings.push('找不到 Übersicht，桌面看板尚未啟用。安裝方式：brew install --cask ubersicht，裝好後重跑 helm install。')
+    return
+  }
+  const ubersicht = deps.ubersicht ?? defaultUbersichtDeps()
+  const dir = scannedWidgetDir(paths, ubersicht)
+  const widget = join(dir, WIDGET_NAME)
+  // Same fallback as the SwiftBar plugin: when ~/.local/bin/helm belongs to
+  // somebody else, call the entry point directly rather than draw nothing.
+  const argv = invocation.wrapperOk
+    ? [invocation.wrapper, 'status', '--json']
+    : [invocation.nodeBin, invocation.entryRaw, 'status', '--json']
+  // 0644, not 0755: a widget is a module Übersicht imports, not a program it
+  // runs, and an executable bit here would only be noise.
+  if (writeOurFile(widget, `${buildWidget(argv)}`, 0o644)) {
+    steps.push(`已安裝桌面 widget：${widget}`)
+  } else {
+    warnings.push(`${widget} 已經存在且不是 helm 寫的，未覆寫。`)
+  }
+  if (adoptWidgetDir(dir, ubersicht)) {
+    steps.push(`已把 Übersicht 的 widget 資料夾設為 ${dir}`)
+  }
 }
 
 export function uninstallHook(paths: HelmPaths, deps: InstallDeps): InstallReport {
@@ -176,12 +234,14 @@ export function uninstallHook(paths: HelmPaths, deps: InstallDeps): InstallRepor
   }
 
   const swiftbar = deps.swiftbar ?? defaultSwiftBarDeps()
+  const ubersicht = deps.ubersicht ?? defaultUbersichtDeps()
   for (const path of [
     wrapperPath(paths),
     join(scannedPluginDir(paths, swiftbar), PLUGIN_NAME),
     // The pre-rename default, so an install from before this moved still
     // gets cleaned up rather than left running.
     join(paths.home, 'Library', 'Application Support', 'SwiftBar', PLUGIN_NAME),
+    join(scannedWidgetDir(paths, ubersicht), WIDGET_NAME),
   ]) {
     if (!isOurScript(path)) continue
     rmSync(path, { force: true })
@@ -227,16 +287,28 @@ function nodeInvocation(nodeBin: string): string {
 
 /** Returns false when something helm did not write already occupies the path. */
 function writeOurScript(path: string, body: string): boolean {
+  return writeOurFile(path, `${body}${SCRIPT_MARKER}\n`, 0o755)
+}
+
+function writeOurFile(path: string, body: string, mode: number): boolean {
   if (existsSync(path) && !isOurScript(path)) return false
   mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(path, `${body}${SCRIPT_MARKER}\n`, 'utf8')
-  chmodSync(path, 0o755)
+  writeFileSync(path, body, 'utf8')
+  chmodSync(path, mode)
   return true
 }
 
+/**
+ * Both marker forms are accepted, because helm writes two kinds of file: shell
+ * scripts, where the marker is a `#` comment, and an Übersicht widget, which is
+ * an ES module where `#` is a syntax error. Requiring the comment prefix — not
+ * just the bare word — is what keeps a third-party file that merely mentions
+ * helm from being deleted by uninstall.
+ */
 function isOurScript(path: string): boolean {
   try {
-    return readFileSync(path, 'utf8').includes(SCRIPT_MARKER)
+    const body = readFileSync(path, 'utf8')
+    return body.includes(SCRIPT_MARKER) || body.includes(WIDGET_COMMENT)
   } catch {
     // Missing or unreadable: either way it is not a file helm may delete.
     return false

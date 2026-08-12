@@ -1,15 +1,30 @@
 import { fileURLToPath } from 'node:url'
-import { installHook, uninstallHook, type InstallReport } from '../hook/install.ts'
+import {
+  installHook, uninstallHook, type InstallDeps, type InstallReport,
+} from '../hook/install.ts'
 import { currentPaths } from './status.ts'
 
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url))
 
-export function runInstall(_argv: readonly string[]): number {
-  return report(installHook(currentPaths(), { now: Date.now, repoRoot: REPO_ROOT }), '安裝')
+/**
+ * `overrides` exists for the tests. Without it they reach the real `defaults`
+ * database, and one of them did: it wrote a temp path into Übersicht's own
+ * settings and then deleted the directory. Nothing in helm should be able to
+ * change the user's machine from a test run.
+ */
+export function runInstall(_argv: readonly string[], overrides: Partial<InstallDeps> = {}): number {
+  return report(installHook(currentPaths(), deps(overrides)), '安裝')
 }
 
-export function runUninstall(_argv: readonly string[]): number {
-  return report(uninstallHook(currentPaths(), { now: Date.now, repoRoot: REPO_ROOT }), '解除安裝')
+export function runUninstall(
+  _argv: readonly string[],
+  overrides: Partial<InstallDeps> = {},
+): number {
+  return report(uninstallHook(currentPaths(), deps(overrides)), '解除安裝')
+}
+
+function deps(overrides: Partial<InstallDeps>): InstallDeps {
+  return { now: Date.now, repoRoot: REPO_ROOT, ...overrides }
 }
 
 /**
