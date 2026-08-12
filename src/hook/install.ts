@@ -16,10 +16,13 @@ import {
   type UbersichtDeps,
 } from './ubersicht.ts'
 import type { ScannedDir } from './scan-dir.ts'
+import { appInstalled } from './app-present.ts'
 import { buildWidget, WIDGET_MARKER, WIDGET_NAME } from './widget.ts'
 
 const SWIFTBAR_APP = '/Applications/SwiftBar.app'
 const UBERSICHT_APP = '/Applications/Übersicht.app'
+const SWIFTBAR_BUNDLE = 'com.ameba.SwiftBar'
+const UBERSICHT_BUNDLE = 'tracesOf.Uebersicht'
 
 /**
  * Written into every script helm generates, so uninstall can tell its own
@@ -177,14 +180,28 @@ function apply(
   else if (isSymlink(wrapper)) warnings.push(refusedSymlink(wrapper))
   else warnings.push(`${wrapper} 已經存在且不是 helm 寫的（Kubernetes 的 helm 也叫這個名字），未覆寫。想用 helm 指令請自行改名或換一個位置。`)
 
-  installPlugin(paths, deps, { wrapper, wrapperOk, entryRaw, nodeBin }, steps, warnings)
-
-  installWidget(paths, deps, { wrapper, wrapperOk, entryRaw, nodeBin }, steps, warnings)
+  const invocation = { wrapper, wrapperOk, entryRaw, nodeBin }
+  // Each integration is isolated. They are independent features, and a
+  // read-only SwiftBar folder used to abort `apply()` outright — the desktop
+  // widget was never installed, and even the PATH warning went unprinted.
+  isolate('SwiftBar', () => installPlugin(paths, deps, invocation, steps, warnings), warnings)
+  isolate('Übersicht', () => installWidget(paths, deps, invocation, steps, warnings), warnings)
 
   if (!onPath(dirname(wrapper))) {
     warnings.push(`${dirname(wrapper)} 不在 PATH 上，直接打 helm 會找不到。把它加進 shell 設定即可。`)
   }
   warnings.push('hook 要等下一個 Claude Code session 啟動才會生效。')
+}
+
+function isolate(label: string, run: () => void, warnings: string[]): void {
+  try {
+    run()
+  } catch (err) {
+    warnings.push(
+      `${label} 這部分失敗了：${err instanceof Error ? err.message : String(err)}。`
+      + '其餘部分照常安裝完成。',
+    )
+  }
 }
 
 interface Invocation {
@@ -207,7 +224,7 @@ function installPlugin(
   steps: string[],
   warnings: string[],
 ): void {
-  if (!(deps.swiftbarInstalled ?? existsSync(SWIFTBAR_APP))) {
+  if (!(deps.swiftbarInstalled ?? appInstalled(SWIFTBAR_APP, SWIFTBAR_BUNDLE))) {
     warnings.push('找不到 SwiftBar，選單列看板尚未啟用。安裝方式：brew install --cask swiftbar，裝好後重跑 helm install。')
     return
   }
@@ -251,7 +268,7 @@ function installWidget(
   steps: string[],
   warnings: string[],
 ): void {
-  if (!(deps.ubersichtInstalled ?? existsSync(UBERSICHT_APP))) {
+  if (!(deps.ubersichtInstalled ?? appInstalled(UBERSICHT_APP, UBERSICHT_BUNDLE))) {
     warnings.push('找不到 Übersicht，桌面看板尚未啟用。安裝方式：brew install --cask ubersicht，裝好後重跑 helm install。')
     return
   }

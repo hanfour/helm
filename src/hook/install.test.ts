@@ -729,3 +729,26 @@ test('裝了 widget 就要提到拖曳需要 Enable interaction', () => {
     report.warnings.join('\n'),
   )
 })
+
+test('SwiftBar 那一半失敗時，Übersicht 仍然裝得起來 —— 兩者互不相干', () => {
+  // `installWidget` sits after the SwiftBar branch inside one try block, so a
+  // read-only plugin folder aborted `apply()` and the desktop widget was
+  // never installed at all — nor was the PATH warning printed.
+  const h = home({})
+  const pluginDir = join(h, 'SwiftBar')
+  mkdirSync(pluginDir, { recursive: true })
+  chmodSync(pluginDir, 0o500)
+  try {
+    const report = installHook(resolvePaths({ home: h }), {
+      ...DEPS, ubersichtInstalled: true, ubersicht: fakePrefs(),
+    })
+    assert.ok(
+      report.warnings.some((w) => w.includes('SwiftBar') || w.includes(pluginDir)),
+      `SwiftBar 的失敗要說出來：${report.warnings.join('\n')}`,
+    )
+    const widget = join(h, 'Library', 'Application Support', 'Übersicht', 'widgets', 'helm.jsx')
+    assert.equal(existsSync(widget), true, '另一半不該被連坐')
+  } finally {
+    chmodSync(pluginDir, 0o700)
+  }
+})

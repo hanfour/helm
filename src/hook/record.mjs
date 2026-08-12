@@ -19,7 +19,9 @@
 // broke under an inherited `SHELLOPTS=errexit`, and could emit invalid JSON
 // when a session id contained an escaped quote.
 
-import { readFileSync, writeFileSync, renameSync, appendFileSync, unlinkSync } from 'node:fs'
+import {
+  readFileSync, writeFileSync, renameSync, appendFileSync, statSync, unlinkSync,
+} from 'node:fs'
 import { join } from 'node:path'
 
 /** Matches the reader's cap so the hot path never writes bytes nobody reads. */
@@ -118,15 +120,40 @@ function cleanup(temp) {
  * this log is the compensation that keeps the exemption honest — including a
  * check that the log itself is writable, since a failure here is invisible.
  */
+/**
+ * Bounded, because a persistent failure writes one line per tool call for
+ * ever. Deleting ~/.helm/live by hand is expected — uninstall explicitly
+ * leaves it — and after that every single call appends ~235 bytes with no
+ * rotation, while `helm doctor` reads the whole file into memory.
+ *
+ * Truncating to the tail keeps the newest lines, which are the ones that
+ * describe what is broken now.
+ */
+const LOG_MAX_BYTES = 32 * 1024
+
 function log(errorsLog, err) {
   if (!errorsLog) return
   try {
     appendFileSync(errorsLog, `${new Date().toISOString()} ${String(err)}\n`, 'utf8')
+    trimLog(errorsLog)
   } catch {
     // The log is the last resort and it failed too. Exiting non-zero would
     // put an error notice in front of the user on every tool call; staying
     // silent is the lesser harm, and `helm doctor` checks writability.
   }
+}
+
+function trimLog(file) {
+  const size = statSync(file).size
+  if (size <= LOG_MAX_BYTES) return
+  const body = readFileSync(file, 'utf8')
+  const cut = body.indexOf('\n', body.length - LOG_MAX_BYTES)
+  const kept = cut === -1 ? body.slice(-LOG_MAX_BYTES) : body.slice(cut + 1)
+  // Same temp-then-rename as the markers: a crash mid-truncate would leave a
+  // half-written log, and this runs before every tool call the user makes.
+  const temp = `${file}.${process.pid}.tmp`
+  writeFileSync(temp, kept, 'utf8')
+  renameSync(temp, file)
 }
 
 try {

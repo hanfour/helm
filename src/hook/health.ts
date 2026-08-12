@@ -8,6 +8,7 @@ import { quarantinePath } from '../projects/prefs.ts'
 import { readLiveMarker } from '../reconcile/live.ts'
 import { hasHelmHook, helmHookCommand } from './settings.ts'
 import { referencedPaths } from './referenced.ts'
+import { appInstalled } from './app-present.ts'
 import {
   defaultSwiftBarDeps, PLUGIN_NAME, resolvePluginDir, type SwiftBarDeps,
 } from './swiftbar.ts'
@@ -18,6 +19,8 @@ const ORPHAN_MAX_AGE_MS = 30 * 86_400_000
 const ERROR_TAIL_LINES = 5
 const SWIFTBAR_APP = '/Applications/SwiftBar.app'
 const UBERSICHT_APP = '/Applications/Übersicht.app'
+const SWIFTBAR_BUNDLE = 'com.ameba.SwiftBar'
+const UBERSICHT_BUNDLE = 'tracesOf.Uebersicht'
 
 export interface Check {
   name: string
@@ -51,8 +54,14 @@ export function runChecks(paths: HelmPaths, board: Board, deps: CheckDeps = {}):
     registryParse(paths, board),
     prefsHealth(paths, board),
     runtimePaths(paths, deps),
-    swiftbar(paths, deps.swiftbar ?? defaultSwiftBarDeps(), deps.swiftbarInstalled ?? existsSync(SWIFTBAR_APP)),
-    ubersicht(paths, deps.ubersicht ?? defaultUbersichtDeps(), deps.ubersichtInstalled ?? existsSync(UBERSICHT_APP)),
+    swiftbar(
+      paths, deps.swiftbar ?? defaultSwiftBarDeps(),
+      deps.swiftbarInstalled ?? appInstalled(SWIFTBAR_APP, SWIFTBAR_BUNDLE),
+    ),
+    ubersicht(
+      paths, deps.ubersicht ?? defaultUbersichtDeps(),
+      deps.ubersichtInstalled ?? appInstalled(UBERSICHT_APP, UBERSICHT_BUNDLE),
+    ),
   ]
 }
 

@@ -1,7 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HOOK_MARKER, buildHookCommand, recorderPath, shellQuote } from './snippet.ts'
@@ -253,4 +255,26 @@ test('shellQuote 交給真的 shell 驗證是單一參數', () => {
     const back = execFileSync('/bin/sh', ['-c', `printf '%s' ${shellQuote(s)}`], { encoding: 'utf8' })
     assert.equal(back, s)
   }
+})
+
+test('錯誤紀錄有大小上限 —— 失敗狀態下每次工具呼叫都會追加一行', () => {
+  // Delete ~/.helm/live by hand (uninstall explicitly leaves it, so that is
+  // expected) and every tool call appends a line for ever: no rotation, and
+  // `helm doctor` reads the whole file into memory.
+  const live = tempDir('helm-hook-')
+  const log = join(live, 'errors.log')
+  const gone = join(live, 'does-not-exist')
+  // Start from an oversized log rather than spawning hundreds of times.
+  writeFileSync(log, `${Array.from({ length: 3000 }, (_, i) => `old-line-${i}`).join('\n')}\n`)
+  const before = statSync(log).size
+  assert.ok(before > 32 * 1024, `前提：先寫成超過上限，實際 ${before}`)
+
+  assert.equal(runHook(bash('npm test'), { liveDir: gone, errorsLog: log }).code, 0)
+
+  const body = readFileSync(log, 'utf8')
+  assert.ok(body.length <= 32 * 1024, `截斷後仍有 ${body.length} bytes`)
+  assert.match(body, /ENOENT/, '這一次的錯誤要留著')
+  assert.doesNotMatch(body, /old-line-0\b/, '最舊的要被丟掉')
+  assert.match(body, /^\d{4}-|^old-line-\d+$/m, '截斷要切在換行上，不留半行')
+  assert.deepEqual(readdirSync(live).filter((n) => n.includes('.tmp')), [], '不留暫存檔')
 })
