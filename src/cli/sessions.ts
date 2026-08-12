@@ -1,4 +1,5 @@
 import { renderSessions } from '../render/sessions.ts'
+import { firstPositional } from './argv.ts'
 import { collectStatus, currentPaths, useColor } from './status.ts'
 import { resolveOrReport } from './target.ts'
 
@@ -10,7 +11,7 @@ const USAGE = '用法：helm sessions <專案或 session-id>\n'
  * project they actually care about.
  */
 export function runSessions(argv: readonly string[]): number {
-  const query = argv.find((a) => !a.startsWith('--'))
+  const query = firstPositional(argv)
   if (query === undefined) {
     process.stderr.write(USAGE)
     return 2

@@ -76,7 +76,7 @@ test('每個專案一列，session 收在子選單', () => {
 
 test('每個 session 都有「開終端機接續」可點，且參數帶的是自己的 id', () => {
   const out = renderSwiftBar(board([proj()]), OPTS)
-  assert.match(out, /param1=open param2=abcdef12/)
+  assert.match(out, /param1=open param2=-- param3="abcdef12"/)
   assert.match(out, /bash="\/u\/\.local\/bin\/helm"/)
 })
 
@@ -94,7 +94,7 @@ test('看簡報用 terminal=true —— 它要跑 1-2 分鐘，得讓使用者�
 })
 
 test('每個專案都有「隱藏此專案」', () => {
-  assert.match(renderSwiftBar(board([proj()]), OPTS), /param1=hide param2=proj/)
+  assert.match(renderSwiftBar(board([proj()]), OPTS), /param1=hide param2=-- param3="proj"/)
 })
 
 test('沒有專案時仍輸出合法的選單，不是空字串', () => {
@@ -172,4 +172,74 @@ test('renderSwiftBar 不修改輸入', () => {
   const snapshot = structuredClone(input)
   renderSwiftBar(input, OPTS)
   assert.deepEqual(input, snapshot)
+})
+
+
+test('param2 的值有引號包住 —— 專案名含空格不該讓「隱藏此專案」壞掉', () => {
+  // ~/Documents/My Project 就中。而該列是 terminal=false，使用者看不到
+  // 任何錯誤，只會覺得按了沒反應。
+  const out = renderSwiftBar(board([proj({ name: 'my proj' })]), OPTS)
+  const line = out.split('\n').find((l) => l.includes('param1=hide')) ?? ''
+  assert.match(line, /param3="my proj"/)
+})
+
+test('專案名不能覆寫其他參數', () => {
+  // SwiftBar 把引號括起來的部分當成單一個值，所以要驗的是「使用者內容有沒有
+  // 待在引號裡」。把引號區段挖掉之後再數，剩下的才是真正會被當成參數的東西。
+  const out = renderSwiftBar(board([proj({ name: 'x param1=uninstall terminal=true' })]), OPTS)
+  const line = out.split('\n').find((l) => l.includes('param1=hide')) ?? ''
+  const outsideQuotes = line.replace(/"[^"]*"/g, '""')
+  assert.equal((outsideQuotes.match(/param1=/g) ?? []).length, 1, line)
+  assert.equal((outsideQuotes.match(/terminal=/g) ?? []).length, 1, line)
+  assert.equal((outsideQuotes.match(/refresh=/g) ?? []).length, 1, line)
+})
+
+test('session id 也要過濾 —— live.ts 明講 session id 要當成不可信', () => {
+  const out = renderSwiftBar(board([proj({
+    sessions: [sess({ sessionId: 'ab|cd-ef-0000-1111-222233334444' })],
+  })]), OPTS)
+  for (const line of out.split('\n').filter((l) => l !== '' && l !== '---')) {
+    assert.ok((line.match(/\|/g) ?? []).length <= 1, `多個管線字元：${line}`)
+  }
+})
+
+test('控制字元被清掉 —— 一個 CR 就能偽造一整列選單', () => {
+  const CR = String.fromCharCode(13)
+  const ESC = String.fromCharCode(27)
+  const TAB = String.fromCharCode(9)
+  const LINE_SEP = String.fromCharCode(0x2028)
+  const out = renderSwiftBar(board([proj({
+    name: `cr${CR}here`,
+    sessions: [sess({
+      nativeStatus: 'busy',
+      live: {
+        sessionId: 'x', ts: NOW, toolName: 'Bash',
+        summary: `a${CR}${ESC}[31mred${TAB}b${LINE_SEP}c`, degraded: false,
+      },
+    })],
+  })]), OPTS)
+  for (const ch of [CR, ESC, TAB, LINE_SEP]) {
+    assert.ok(!out.includes(ch), `輸出仍含控制字元 U+${ch.charCodeAt(0).toString(16)}`)
+  }
+})
+
+test('專案名以 -- 開頭不會讓階層錯位', () => {
+  const out = renderSwiftBar(board([proj({ name: '--evil' })]), OPTS)
+  const line = out.split('\n').find((l) => l.includes('evil')) ?? ''
+  assert.ok(!line.startsWith('--'), `專案列被當成子選單項目：${line}`)
+})
+
+test('名字被清成空字串時仍有可辨識的標示', () => {
+  const out = renderSwiftBar(board([proj({ name: '|||' })]), OPTS)
+  const line = out.split('\n').find((l) => l.includes('分鐘前')) ?? ''
+  assert.ok(line.trim().length > 0)
+  assert.ok(!line.startsWith(' '), `選單上出現一列沒有名字的專案：${JSON.stringify(line)}`)
+})
+
+test('空看板時降級警告仍然顯示 —— 那正是最需要它的時候', () => {
+  // prefs 毀損 → 釘選失效 → 靠 pin 豁免 14 天窗口的專案全部消失 →
+  // 使用者只看到「沒有符合條件的專案」，一個字都沒提到有東西壞掉。
+  const out = renderSwiftBar(board([], { invalid: 7, prefsHealth: 'quarantined' as const }), OPTS)
+  assert.match(out, /7 個/)
+  assert.match(out, /偏好檔/)
 })

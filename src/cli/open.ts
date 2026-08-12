@@ -1,6 +1,7 @@
 import { briefPathFor, defaultDeps, openSession, writeBriefFile, type LaunchDeps } from '../launch/run.ts'
 import { runClaudeHeadless, type ClaudeRunner } from '../summarize/brief.ts'
 import type { SessionState } from '../types.ts'
+import { firstPositional } from './argv.ts'
 import { briefMarkdownFor } from './brief-source.ts'
 import { collectStatus, currentPaths } from './status.ts'
 import { resolveOrReport, type TargetHit } from './target.ts'
@@ -16,7 +17,7 @@ export async function runOpen(
   argv: readonly string[],
   deps: OpenDeps = { run: runClaudeHeadless, launch: defaultDeps },
 ): Promise<number> {
-  const query = argv.find((a) => !a.startsWith('--'))
+  const query = firstPositional(argv)
   if (query === undefined) {
     process.stderr.write('用法：helm open <專案或 session-id> [--no-brief] [--refresh]\n')
     return 2

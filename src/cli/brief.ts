@@ -1,4 +1,5 @@
 import { runClaudeHeadless, type ClaudeRunner } from '../summarize/brief.ts'
+import { firstPositional } from './argv.ts'
 import { briefMarkdownFor } from './brief-source.ts'
 import { collectStatus, currentPaths } from './status.ts'
 import { chosenSession, resolveOrReport } from './target.ts'
@@ -7,7 +8,7 @@ export async function runBrief(
   argv: readonly string[],
   run: ClaudeRunner = runClaudeHeadless,
 ): Promise<number> {
-  const query = argv.find((a) => !a.startsWith('--'))
+  const query = firstPositional(argv)
   if (query === undefined) {
     process.stderr.write('用法：helm brief <專案或 session-id> [--refresh]\n')
     return 2

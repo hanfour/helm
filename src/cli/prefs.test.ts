@@ -151,3 +151,12 @@ test('真正歧義時仍然列候選，不自動挑', () => {
   assert.match(r.err, /alpha-one/)
   assert.match(r.err, /alpha-two/)
 })
+
+test('以 -- 開頭的專案名也指定得到 —— 用 -- 當旗標結束標記', () => {
+  // APFS 允許目錄名以 dash 開頭，而選單列的「隱藏此專案」是 terminal=false，
+  // 失敗時使用者看不到任何錯誤，只覺得按了沒反應。
+  const home = scaffoldHome([{ project: '--evil', sessions: [{ id: ID('aaaa1110') }] }])
+  const r = captureSync(home, () => runPrefs('hide', ['--', '--evil']))
+  assert.equal(r.code, 0, r.err)
+  assert.equal(readPrefsOf(home).projects[join(home, '--evil')]?.hidden, true)
+})

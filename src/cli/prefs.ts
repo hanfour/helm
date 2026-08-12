@@ -1,6 +1,7 @@
 import { basename } from 'node:path'
 import type { HelmPaths } from '../paths.ts'
 import { quarantinePath, readPrefs, setProjectPref, writePrefs } from '../projects/prefs.ts'
+import { firstPositional } from './argv.ts'
 import { collectStatus, currentPaths } from './status.ts'
 import { matchByTiers } from '../projects/resolve.ts'
 import { resolveOrReport } from './target.ts'
@@ -19,7 +20,7 @@ const DONE: Record<PrefAction, string> = {
 }
 
 export function runPrefs(action: PrefAction, argv: readonly string[]): number {
-  const query = argv.find((a) => !a.startsWith('--'))
+  const query = firstPositional(argv)
   if (query === undefined) {
     process.stderr.write(`用法：helm ${action} <專案>\n`)
     return 2
