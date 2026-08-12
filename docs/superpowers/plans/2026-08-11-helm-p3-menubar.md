@@ -2300,3 +2300,62 @@ helm menu                     130-150 ms  ← 改動前 190-250 ms
 **注意量測方式本身。** 從一個持續變大的 Node 行程連續 spawn 會得到 360-390ms
 的假數字；從 shell 量才是 130-150ms。SwiftBar 是從它自己的 Swift 行程叫 plugin，
 接近後者。
+
+---
+
+## 追加：桌面看板（Übersicht），2026-08-12
+
+計畫原本只有選單列。實際裝上去之後使用者的第一句話是「沒看到選單列」——
+⚓ 其實一直都在，就在 LINE 圖示左邊，但它是綠色文字混在一排彩色圖示裡，
+在二十個 menu bar item 之間不顯眼。**「裝好了」和「看得到」是兩件事。**
+
+於是加了第二個呈現面：Übersicht 把指令的輸出畫在桌布上。
+
+| 檔案 | 責任 |
+|---|---|
+| `src/hook/widget.ts` | 產生 Übersicht widget（一個 ES module），吃 `helm status --json` |
+| `src/hook/ubersicht.ts` | `widgetDir` 偏好的讀寫；掃描資料夾以 app 自己的設定為準 |
+| `src/hook/defaults.ts` | 兩個 app 共用的 `defaults` 讀寫，從 `swiftbar.ts` 抽出 |
+
+沿用 SwiftBar 那邊已經踩過的三條規則：寫進 app **真正掃描**的資料夾、
+wrapper 被別人的 `helm` 佔走時退回直接呼叫 node、失敗一律畫出來
+（空白的 widget 分不出「都閒著」和「helm 壞了」）。
+
+### 這一輪暴露出來的三個錯
+
+**一、PATH。** GUI 啟動的 app 拿到的是 launchd 的裸 PATH
+`/usr/bin:/bin:/usr/sbin:/sbin`，volta / nvm / fnm 的 shim 全在家目錄底下。
+
+```
+$ env -i HOME="$HOME" PATH="/usr/bin:/bin:/usr/sbin:/sbin" ~/SwiftBar/helm.5s.sh
+/Users/you/.local/bin/helm: line 2: exec: node: not found
+```
+
+當時能動，只是因為我從 shell 用 `open -a` 起 SwiftBar，繼承到完整 PATH；
+重開機後就會靜默失效。wrapper、plugin、hook 一律改成把 `process.execPath`
+釘進去，並保留 `[ -x "$NODE" ] || NODE=node` 的退路（版本管理器升級會刪掉舊 image）。
+
+連帶：`settings.ts` 的 `isHelmGroup` 不能再用 `exec node --no-warnings ` 當前綴，
+解譯器路徑因機器而異、升級就變。改用 `exec` / `--no-warnings` / `record.mjs`
+加 marker 的結構指紋。
+
+**二、`defaults read` 會把非 ASCII 變成八進位跳脫。** Übersicht 的資料夾讀回來是
+`…/Application Support/\334bersicht/widgets`，helm 照那個字面去找、找不到，
+於是在剛裝好 widget 的下一秒回報「裡面沒有 helm 的 widget」。
+改走 `defaults export | plutil -extract raw`。這條路只有 install 與 doctor 會走，
+多一次 spawn 不影響五秒的熱路徑。
+
+**三、測試改壞了使用者真的在用的東西，兩次。**
+
+1. CLI 層的安裝測試沒有注入點，把 `/var/folders/…` 寫進了真實的
+   `tracesOf.Uebersicht` `widgetDir`，指向一個測完就刪掉的資料夾。
+2. 補上寫入守門之後，`doctor` 的測試改成去**讀**真實的 SwiftBar
+   `PluginDirectory`，helm 就照著把 fixture 的 plugin 寫進 `~/SwiftBar`，
+   蓋掉正在運作的那一個 —— 選單列變成 ⚠，測試全綠。
+
+兩次都沒有任何東西報錯，都是手動讀 `defaults` 才發現的。現在
+`HELM_NO_REAL_PREFS=1`（`npm test` 與 `check.sh` 都會設）讓**讀寫都直接丟例外**，
+只放行 `com.helm.test.*` 這種測試自己建、自己刪的 domain。
+
+`health.ts` 的兩個 GUI app 檢查也改成可注入。原本讀 `/Applications`，
+等於斷言結果取決於跑測試的機器 —— 在沒裝那個 app 的機器上，那些斷言什麼都沒驗。
