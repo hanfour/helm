@@ -153,11 +153,13 @@ session_meta 的 payload 有 14 種形狀（2026-04 到 2026-08 的版本演進�
 
 **Interfaces:** Consumes Tasks 1–4。Produces `discoverCodex(paths, opts, deps?): { sessions: DiscoveredSession[]; invalid: number }`
 
-- [ ] **Step 1：寫失敗測試**——**多個 rollout 檔要合併成一個 session**（依 `sessionId` 分組，`updatedAt` 取最大的 mtime、`startedAt` 取最小的、`transcriptPath` 指向最新的那個檔）、`adapterId` 是 `'codex'`、`nativeStatus` 是 `null`（Codex 沒有 hook，沒有 busy/idle 之分——這一點不得偽造）、cwd 讀不到的 session 計入 `invalid` 而不是靜默消失、`alwaysInclude`（釘選）的專案不受窗口約束
-- [ ] **Step 2：紅**
-- [ ] **Step 3：實作**
-- [ ] **Step 4：綠**
-- [ ] **Step 5：commit**
+- [x] **Step 1：寫失敗測試**——**多個 rollout 檔要合併成一個 session**（依 `sessionId` 分組，`updatedAt` 取最大的 mtime、`startedAt` 取最小的、`transcriptPath` 指向最新的那個檔）、`adapterId` 是 `'codex'`、`nativeStatus` 是 `null`（Codex 沒有 hook，沒有 busy/idle 之分——這一點不得偽造）、cwd 讀不到的 session 計入 `invalid` 而不是靜默消失、`alwaysInclude`（釘選）的專案不受窗口約束
+- [x] **Step 2：紅**
+- [x] **Step 3：實作**
+- [x] **Step 4：綠**
+- [x] **Step 5：真實資料驗證**——近 14 天 **12 個 session、0 invalid**，冷跑 46.4 ms、有快取 18.9 ms
+- [x] **Step 6：修規格 §6**——12 個全被判成 `crashed`（最近的一個 6 天前）。30 分鐘的規則沒有上界，套到舊 session 就是誤報。補上 6 小時上界，超過就不再宣稱中斷
+- [x] **Step 7：commit**
 
 ### Task 7：把 collectStatus 改成跑過一組 adapter
 

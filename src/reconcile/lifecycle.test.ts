@@ -184,14 +184,22 @@ test('Codex：30 分鐘的兩側都要對', () => {
   assert.equal(at(30.1), 'crashed')
 })
 
-test('Codex 永遠不會是 ended_clean —— 它沒有終止事件', () => {
-  // 這是規格 §6 明講的。把它畫成「已結束」等於宣稱一件 helm 無從得知的事。
-  for (const cwdHasProcess of [true, false]) {
-    for (const mins of [0, 1, 29, 30, 31, 60, 60 * 24 * 30]) {
-      const v = decideCodexLifecycle({ cwdHasProcess, lastEventMs: DAY - mins * 60_000, nowMs: DAY })
-      assert.notEqual(v.lifecycle, 'ended_clean', `${cwdHasProcess} / ${mins} 分鐘`)
-    }
-  }
+test('Codex：超過 6 小時就不再宣稱中斷', () => {
+  // 實測 2026-08-12：只有 30 分鐘下界的話，這台機器近 14 天的 12 個 Codex
+  // session 全部被判成 crashed —— 最近的一個是 6 天前。那條規則描述的是
+  // 「剛剛還在跑、現在行程不見了」，套到六天前關掉的 session 就是誤報，
+  // 而 crashed 是優先序最高、畫成紅色的狀態。
+  const at = (hours: number) =>
+    decideCodexLifecycle({ cwdHasProcess: false, lastEventMs: DAY - hours * 3600_000, nowMs: DAY }).lifecycle
+  assert.equal(at(1), 'crashed')
+  assert.equal(at(6), 'crashed', '剛好 6 小時還算')
+  assert.equal(at(6.1), 'ended_clean')
+  assert.equal(at(24 * 7), 'ended_clean')
+})
+
+test('Codex：行程還在時，多久沒動都是 running', () => {
+  const v = decideCodexLifecycle({ cwdHasProcess: true, lastEventMs: DAY - 30 * 86_400_000, nowMs: DAY })
+  assert.equal(v.lifecycle, 'running')
 })
 
 test('Codex 的信心一律是 low —— UI 必須把它跟 Claude Code 的判定區分開', () => {

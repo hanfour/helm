@@ -270,7 +270,25 @@ interface AgentAdapter {
 
 transcript 不含結束標記（§4.2 實測），因此完全不參與此判定，只用於取時間戳比對。
 
-**Codex**：`ps` 中存在 cwd 相符的 `codex` 行程 → `running`；否則若最後事件距今 **超過 30 分鐘** → `crashed`，未超過則維持 `running`（避免 `ps` 短暫抓不到就誤判）。Codex 無終止事件，因此**永遠不會被判為 `ended_clean`**。所有 Codex session 的 `lifecycleConfidence` 一律標為 `low`，UI 須區分呈現，不得與 Claude Code 的高信心判定混用同一視覺樣式。
+**Codex**（2026-08-12 依實測修訂）：
+
+| 條件 | lifecycle |
+|---|---|
+| `ps` 中有 cwd 相符的 `codex` 行程 | `running` |
+| 無行程，最後事件 ≤ 30 分鐘 | `running` —— 避免 `ps` 短暫抓不到就誤判 |
+| 無行程，最後事件 30 分鐘 – 6 小時 | `crashed` |
+| 無行程，最後事件 > 6 小時 | `ended_clean` |
+
+**上界是實測補上的。** 原本只有 30 分鐘的下界，於是這台機器上近 14 天的
+12 個 Codex session **全部**被判為 `crashed`——最近的一個是 6 天前。那條規則
+描述的是「剛剛還在跑、現在行程不見了」，把它套到六天前關掉的 session 就成了
+誤報，而 `crashed` 是優先序最高、畫成紅色的狀態：12 個假紅點會把真正的中斷淹掉。
+
+超過 6 小時之後 helm 其實**不知道**那個 session 是當機還是正常結束。這裡用
+`ended_clean` 是因為它在 UI 上的效果是「不畫點」，也就是不宣稱任何事——而不是
+因為 helm 認定它乾淨結束了。`lifecycleConfidence` 一律 `low` 正是為此存在。
+
+所有 Codex session 的 `lifecycleConfidence` 一律標為 `low`，UI 須區分呈現，不得與 Claude Code 的高信心判定混用同一視覺樣式。
 
 ## 7. 專案納入規則
 

@@ -121,6 +121,23 @@ export function reconcileSessions(
  */
 export const CODEX_ABANDON_MS = 30 * 60_000
 
+/**
+ * Past this, helm stops claiming the session crashed.
+ *
+ * Measured 2026-08-12: with only the lower bound, all 12 Codex sessions from
+ * the last fortnight on this machine came back `crashed` — the most recent of
+ * them six days old. The 30-minute rule describes "it was running a moment
+ * ago and now the process is gone"; stretched over six days it is just a
+ * guess, and `crashed` is the highest-priority, red-drawn state. Twelve false
+ * red dots would bury a real one.
+ *
+ * Beyond this helm genuinely does not know whether the session crashed or was
+ * closed normally. `ended_clean` is used because its effect in the UI is to
+ * draw no dot at all — that is, to claim nothing — not because helm believes
+ * it ended cleanly. That is what `low` confidence is there to say.
+ */
+export const CODEX_UNKNOWN_MS = 6 * 3600_000
+
 export interface CodexLifecycleInput {
   /** A running `codex` process whose cwd matches this session's. */
   cwdHasProcess: boolean
@@ -134,8 +151,8 @@ export interface CodexLifecycleInput {
  * ways that must not be smoothed over:
  *
  *   - **There is no clean-exit signal.** Codex writes no termination event, so
- *     `ended_clean` is unreachable by construction. Drawing a Codex session as
- *     "finished" would assert something helm cannot know.
+ *     `ended_clean` here does not mean "it finished cleanly" — it means helm
+ *     has stopped guessing, and its effect in the UI is to draw no dot.
  *   - **Confidence is always low.** Everything here is inferred from a process
  *     table and a file mtime, never from the tool saying so. The UI has to
  *     show that difference rather than mixing it in with Claude Code's
@@ -146,7 +163,8 @@ export function decideCodexLifecycle(input: CodexLifecycleInput): LifecycleVerdi
   // `Math.max(0, …)` because a clock skew or a touched file can put the last
   // event in the future, and a negative age must not read as "long ago".
   const idleMs = Math.max(0, input.nowMs - input.lastEventMs)
-  return idleMs > CODEX_ABANDON_MS
-    ? { lifecycle: 'crashed', confidence: 'low' }
-    : { lifecycle: 'running', confidence: 'low' }
+  if (idleMs <= CODEX_ABANDON_MS) return { lifecycle: 'running', confidence: 'low' }
+  return idleMs > CODEX_UNKNOWN_MS
+    ? { lifecycle: 'ended_clean', confidence: 'low' }
+    : { lifecycle: 'crashed', confidence: 'low' }
 }
