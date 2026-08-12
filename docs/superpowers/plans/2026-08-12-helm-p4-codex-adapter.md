@@ -1,0 +1,169 @@
+# P4：Codex adapter 實作計畫
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** 讓看板看得到 Codex 的 session，與 Claude Code 並列在同一個專案底下。
+
+**Architecture:** 新增 `src/adapters/codex/`，形狀與 `claude-code/` 對稱。核心的 `collectStatus` 改成跑過一組 adapter 而不是寫死一個；`reconcile` 依 `adapterId` 分派 lifecycle 規則。UI 不動——它早就吃 `SessionState`，而低信心的區分呈現（選單列 `●?`、widget `◍`）在 P3 的 review 修正裡已經就緒。
+
+**Tech Stack:** TypeScript on Node 24（無 build step）、`node --test`。外部指令只用 `pgrep` 與 `lsof`，兩者都在 launchd 的裸 PATH 裡。
+
+## Global Constraints
+
+- `discoverSessions` 的效能契約：**不得讀 transcript、不得發網路請求**。選單列每 5 秒呼叫它。
+- Codex session 的 `lifecycleConfidence` **一律 `low`**（規格 §6），且**永遠不會是 `ended_clean`**——Codex 沒有終止事件。
+- 測試不得碰真實的 `~/.codex`。所有 fixture 走 `tempDir()`。
+- 每個降級的 `catch` 都要有註解說明為什麼；使用者可見的降級必須說出來。
+
+---
+
+## 實測資料（2026-08-12，本機 codex-cli 0.146.0）
+
+計畫的每個決定都建立在這些數字上：
+
+```
+~/.codex/history.jsonl            552 行、61 個 session id
+~/.codex/sessions/**/rollout-*.jsonl   192 個，近 14 天 34 個
+兩者 session id 交集                60（history 只涵蓋有送出 prompt 的）
+rollout 第一行大小                 8.6–18.6 KB（塞著完整的 base_instructions）
+讀 34 個檔案的第一行               25.7 ms
+lsof -a -d cwd -p <13 pids>        32 ms（對照：ps -eo 是 36 ms）
+```
+
+**檔名就帶著 session_id 與開始時間**，這是整個快速路徑的關鍵：
+
+```
+rollout-2026-08-03T14-25-24-019fc64c-6b8a-7882-8c7b-c019bd18484c.jsonl
+        └─────── 開始時間 ──────┘ └──────── session_id ────────────┘
+```
+
+所以快速路徑**只有 `cwd` 需要讀檔**，而 `cwd` 寫在 `session_meta` 裡、永不改變 → 可以永久快取。首次跑付 25.7 ms，之後只有新 session 需要讀。
+
+## File Structure
+
+| 檔案 | 責任 |
+|---|---|
+| `src/adapters/codex/paths.ts` | `~/.codex` 底下的位置，與 `HelmPaths` 對稱 |
+| `src/adapters/codex/rollout-name.ts` | 檔名 ↔ `{sessionId, startedAt}`，純函式 |
+| `src/adapters/codex/scan.ts` | 遞迴掃 `sessions/YYYY/MM/DD/`，只 stat 不讀內容 |
+| `src/adapters/codex/meta.ts` | 讀 `session_meta` 第一行取 `cwd`；帶持久快取 |
+| `src/adapters/codex/processes.ts` | `pgrep codex` + `lsof -d cwd`，回 cwd → pid |
+| `src/adapters/codex/discover.ts` | 組裝成 `DiscoveredSession[]` |
+| `src/adapters/codex/history.ts` | 慢速路徑：從 `history.jsonl` 取該 session 的 prompt |
+| `src/adapters/registry.ts` | 一組 adapter，`collectStatus` 跑過它 |
+
+---
+
+### Task 1：從 rollout 檔名解析 session id 與開始時間
+
+**Files:** Create `src/adapters/codex/rollout-name.ts`、`rollout-name.test.ts`
+
+**Interfaces:** Produces `parseRolloutName(name: string): { sessionId: string; startedAt: number } | null`
+
+- [ ] **Step 1：寫失敗測試**——正常檔名、非 rollout 檔名、時間戳格式壞掉、uuid 少一段、目錄分隔符混進來。時間是本地時間還是 UTC 要對照 `session_meta.timestamp` 確認（實測那一筆檔名 `T14-25-24` 對應 payload 的 `06:25:24.937Z`，差 8 小時 → **檔名是本地時間**，這件事必須有測試釘住，否則排序會錯 8 小時）
+- [ ] **Step 2：跑測試確認紅**
+- [ ] **Step 3：實作**——`rollout-<YYYY>-<MM>-<DD>T<HH>-<mm>-<ss>-<uuid>.jsonl`，uuid 是最後 36 字元
+- [ ] **Step 4：綠**
+- [ ] **Step 5：commit**
+
+### Task 2：掃描 rollout 目錄
+
+**Files:** Create `src/adapters/codex/scan.ts`、`scan.test.ts`
+
+**Interfaces:** Consumes Task 1。Produces `scanRollouts(sessionsDir, sinceMs): RolloutFile[]`，欄位 `{ sessionId, path, startedAt, mtimeMs }`
+
+- [ ] **Step 1：寫失敗測試**——`YYYY/MM/DD` 三層結構、窗口過濾用 mtime 不是檔名時間（session 可能開很久）、目錄不存在回空陣列不丟例外、非 rollout 檔案略過、檔名解析失敗的檔案略過而不是讓整批失敗
+- [ ] **Step 2：紅**
+- [ ] **Step 3：實作**——`readdirSync(withFileTypes)` 遞迴三層，只 `statSync`，絕不讀內容
+- [ ] **Step 4：綠**
+- [ ] **Step 5：量測**——對真實的 `~/.codex` 跑一次，記錄耗時進計畫
+- [ ] **Step 6：commit**
+
+### Task 3：cwd 的讀取與快取
+
+**Files:** Create `src/adapters/codex/meta.ts`、`meta.test.ts`
+
+**Interfaces:** Produces `readCwd(path): string | null`、`CwdCache` 介面 `{ get(sessionId), set(sessionId, cwd), flush() }`
+
+- [ ] **Step 1：寫失敗測試**——第一行不是 JSON、`type` 不是 `session_meta`、`payload.cwd` 缺、cwd 不是絕對路徑（一律拒絕，同 `scan-dir.ts` 的理由）、18 KB 的第一行讀得完、快取命中時不碰檔案（用一個會丟例外的 reader 證明）
+- [ ] **Step 2：紅**
+- [ ] **Step 3：實作**——快取檔 `~/.helm/codex-cwd.json`，原子寫（temp + rename），讀不到就當空快取
+- [ ] **Step 4：綠**
+- [ ] **Step 5：commit**
+
+### Task 4：Codex 行程的存活判定
+
+**Files:** Create `src/adapters/codex/processes.ts`、`processes.test.ts`
+
+**Interfaces:** Produces `liveCodexCwds(deps?): Set<string>`
+
+- [ ] **Step 1：寫失敗測試**——`pgrep` 找不到任何行程（正常狀態，回空 Set 不丟例外）、`lsof` 不存在、`lsof` 回傳部分失敗、cwd 含空白、行程數為 0 時**不呼叫 lsof**（省一次 spawn）
+- [ ] **Step 2：紅**
+- [ ] **Step 3：實作**——`pgrep -x codex` 取 pid，再 `lsof -a -d cwd -Fn -p <pids>` 解 `n` 開頭的行
+- [ ] **Step 4：綠**
+- [ ] **Step 5：commit**
+
+### Task 5：Codex 的 lifecycle 規則
+
+**Files:** Modify `src/reconcile/lifecycle.ts`、`lifecycle.test.ts`
+
+**Interfaces:** 依 `adapterId` 分派。Codex 分支（規格 §6）：
+
+| 條件 | lifecycle | confidence |
+|---|---|---|
+| `ps` 有 cwd 相符的 codex 行程 | `running` | `low` |
+| 無行程，最後事件距今 ≤ 30 分鐘 | `running` | `low` |
+| 無行程，最後事件距今 > 30 分鐘 | `crashed` | `low` |
+
+- [ ] **Step 1：寫失敗測試**——三條規則各一、邊界值 30 分鐘的兩側、**永遠不會回 `ended_clean`**（這條要對所有輸入組合斷言）、confidence 永遠是 `low`
+- [ ] **Step 2：紅**
+- [ ] **Step 3：實作**
+- [ ] **Step 4：綠**
+- [ ] **Step 5：commit**
+
+### Task 6：組裝 DiscoveredSession
+
+**Files:** Create `src/adapters/codex/discover.ts`、`discover.test.ts`
+
+**Interfaces:** Consumes Tasks 1–4。Produces `discoverCodex(paths, opts, deps?): { sessions: DiscoveredSession[]; invalid: number }`
+
+- [ ] **Step 1：寫失敗測試**——`adapterId` 是 `'codex'`、`nativeStatus` 是 `null`（Codex 沒有 hook，沒有 busy/idle 之分——這一點不得偽造）、`transcriptPath` 指向 rollout、cwd 讀不到的 session 計入 `invalid` 而不是靜默消失、`alwaysInclude`（釘選）的專案不受窗口約束
+- [ ] **Step 2：紅**
+- [ ] **Step 3：實作**
+- [ ] **Step 4：綠**
+- [ ] **Step 5：commit**
+
+### Task 7：把 collectStatus 改成跑過一組 adapter
+
+**Files:** Create `src/adapters/registry.ts`；Modify `src/cli/status.ts`、`src/projects/group.ts`（若需要）
+
+**Interfaces:** Produces `ADAPTERS: readonly AgentAdapter[]`
+
+- [ ] **Step 1：寫失敗測試**——同一個 cwd 底下的 Claude Code 與 Codex session 歸到同一個專案、`invalid` 是各 adapter 的總和、其中一個 adapter 丟例外時另一個仍然出得來（隔離，同 P3 的 install 教訓）、`aggregateStatus` 對混合 session 的優先序
+- [ ] **Step 2：紅**
+- [ ] **Step 3：實作**
+- [ ] **Step 4：綠**
+- [ ] **Step 5：效能驗證**——用行程內部的 `process.uptime()` 量（外部 wall-clock 在這台機器上量不出東西，見 P3 計畫末節），確認 `helm menu` 仍在 200 ms 契約內
+- [ ] **Step 6：commit**
+
+### Task 8：Resume 與慢速路徑
+
+**Files:** Create `src/adapters/codex/history.ts`、`history.test.ts`；Modify `src/launch/script.ts`、`src/summarize/input.ts`
+
+**Interfaces:** Produces `codexPrompts(historyPath, sessionId): string[]`、resume 指令 `codex resume <session_id>`
+
+- [ ] **Step 1：寫失敗測試**——`history.jsonl` 只有 60/192 個 session 有記錄（沒送過 prompt 的就沒有），所以「找不到」是正常狀態不是錯誤；壞掉的行略過而不是整批失敗；`helm open` 對 codex session 送出的是 `codex resume`
+- [ ] **Step 2：紅**
+- [ ] **Step 3：實作**
+- [ ] **Step 4：綠**
+- [ ] **Step 5：commit**
+
+---
+
+## 已知的取捨
+
+**`history.jsonl` 只涵蓋 60/192 個 session。** 沒送出過 prompt 的 session 在那裡沒有記錄，簡報只能退回讀 rollout。這不是 bug，是資料來源的形狀——UI 不得因此顯示成錯誤。
+
+**Codex 沒有 busy/idle。** 沒有 hook 就沒有「此刻正在跑什麼」。`nativeStatus` 一律 `null`，看板上 Codex 的 session 不會有動作那一行。偽造一個「執行中」比留白更糟。
+
+**30 分鐘的門檻是規格定的，不是量出來的。** 它防的是 `ps` 短暫抓不到就誤判成 crashed。真實的 codex session 閒置多久算死，目前沒有資料——所以那個常數要有名字、有註解、可以改。
