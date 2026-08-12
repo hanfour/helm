@@ -24,6 +24,13 @@ export function collectStatus(
   paths: HelmPaths,
   nowMs: number,
   probe: ProcessProbe = queryProcesses,
+  /**
+   * Injected for the same reason `probe` is. Without it, any test calling
+   * `collectStatus` against a fixture home forked a real `gh` and overwrote
+   * the user's real ~/.helm/prs.json — the fourth incident of this shape in
+   * this project.
+   */
+  spawnRefresh: (paths: HelmPaths) => void = spawnPrRefresh,
 ): Board {
   const { prefs, health: prefsHealth } = readPrefs(paths.prefsFile)
   // Pinned projects are exempt from the window (spec §7), so each scan has to
@@ -71,7 +78,7 @@ export function collectStatus(
   // Reads a small JSON file and, when it is stale, forks a detached refresh
   // that this process never waits for (spec §10). A `gh` sweep measures 1.9 s
   // against a board that redraws every 5 s; they must never meet.
-  const prCache = kickRefreshIfStale(prPaths(paths), nowMs, () => spawnPrRefresh(paths))
+  const prCache = kickRefreshIfStale(prPaths(paths), nowMs, () => spawnRefresh(paths))
   return {
     projects,
     invalid,

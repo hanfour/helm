@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readPrCache, shouldRefresh, writePrCache, type PrCache } from './cache.ts'
 import { tempDir } from '../temp-dir.ts'
@@ -75,4 +75,27 @@ test('降級狀態也存進快取 —— 否則每 5 秒重試一次沒登入的
   writePrCache(f, degraded)
   assert.equal(readPrCache(f)?.degraded, 'gh 尚未登入…')
   assert.equal(shouldRefresh(readPrCache(f), NOW), false, '降級也要遵守 TTL')
+})
+
+test('快取檔是 0600 —— 裡面有私有 repo 名稱與 PR 標題', () => {
+  // install.ts 就在隔壁刻意用 0600，註解記的正是那次 token 以 0644 寫出的事故。
+  const f = file()
+  writePrCache(f, cache())
+  assert.equal(statSync(f).mode & 0o777, 0o600)
+})
+
+test('父目錄不存在時會建出來 —— 第一次跑時 ~/.helm 還沒有', () => {
+  const f = join(tempDir('helm-pr-'), 'nested', 'deep', 'prs.json')
+  writePrCache(f, cache())
+  assert.deepEqual(readPrCache(f), cache())
+})
+
+test('只壞一個欄位的快取也要拒絕 —— 否則會丟 TypeError 炸穿整個看板', () => {
+  // `{"fetchedAt":1,"prs":"nope"}` 會讓 prs.flatMap 在 try 之外爆炸。
+  for (const junk of ['{"fetchedAt":"x","prs":[]}', '{"fetchedAt":1,"prs":"nope"}', '{"prs":[]}']) {
+    const f = file()
+    writeFileSync(f, junk)
+    assert.doesNotThrow(() => readPrCache(f), junk)
+    assert.equal(readPrCache(f), null, junk)
+  }
 })

@@ -50,6 +50,6 @@ export function refreshPrs(
     // holder freezes PR state for five minutes while everything looks fine.
     return true
   } finally {
-    if (opts.keepLock !== true) releaseRefreshLock(paths.lockFile)
+    if (opts.keepLock !== true) releaseRefreshLock(paths.lockFile, nowMs)
   }
 }

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, writeFileSync } from 'node:fs'
+import { existsSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { acquireRefreshLock, releaseRefreshLock } from './lock.ts'
 import { tempDir } from '../temp-dir.ts'
@@ -60,4 +60,28 @@ test('拿到鎖之後檔案存在，放開之後不見', () => {
   assert.equal(existsSync(f), true)
   releaseRefreshLock(f)
   assert.equal(existsSync(f), false)
+})
+
+test('接管之後，原持有者跑完不會刪掉接管者的鎖', () => {
+  // A 拿鎖 → 停超過五分鐘 → B 合法接管 → A 終於跑完，finally 把 B 的鎖刪掉。
+  // 實測那一次筆電休眠造成四個並行的 gh sweep。
+  const f = file()
+  assert.equal(acquireRefreshLock(f, NOW), true, 'A 拿到')
+  const later = NOW + 6 * 60_000
+  assert.equal(acquireRefreshLock(f, later), true, 'B 接管')
+  releaseRefreshLock(f, NOW)
+  assert.equal(acquireRefreshLock(f, later + 1000), false, 'B 的鎖還在')
+})
+
+test('自己的鎖放得掉', () => {
+  const f = file()
+  acquireRefreshLock(f, NOW)
+  releaseRefreshLock(f, NOW)
+  assert.equal(existsSync(f), false)
+})
+
+test('鎖檔權限是 0600 —— ~/.helm 是 world-readable', () => {
+  const f = file()
+  acquireRefreshLock(f, NOW)
+  assert.equal(statSync(f).mode & 0o777, 0o600)
 })

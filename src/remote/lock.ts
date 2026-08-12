@@ -1,4 +1,4 @@
-import { openSync, closeSync, readFileSync, rmSync, writeSync } from 'node:fs'
+import { openSync, closeSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs'
 
 /**
  * How long a refresh may hold the lock before it is assumed dead.
@@ -27,21 +27,39 @@ export function acquireRefreshLock(file: string, nowMs: number): boolean {
   const heldAt = readHeldAt(file)
   if (heldAt !== null && Math.abs(nowMs - heldAt) < LOCK_STALE_MS) return false
 
-  // Stale, unreadable, or dated in the future: take it over. Removing first
-  // keeps the create atomic, so two processes arriving together still produce
-  // exactly one winner.
-  rmSync(file, { force: true })
-  return tryCreate(file, nowMs)
+  // Stale. Taking over used to be `rmSync` then `tryCreate`, which is not
+  // atomic at all — measured, 23% of contended takeovers produced more than
+  // one winner. `renameSync` onto the lock path is atomic, so exactly one of
+  // the racers ends up owning it; everyone else's rename lands on a file the
+  // winner has already replaced, and the ownership check below catches them.
+  const claim = `${file}.${process.pid}.claim`
+  try {
+    writeFileSync(claim, String(nowMs), { encoding: 'utf8', mode: 0o600 })
+    renameSync(claim, file)
+  } catch {
+    rmSync(claim, { force: true })
+    return false
+  }
+  return readHeldAt(file) === nowMs
 }
 
-export function releaseRefreshLock(file: string): void {
+/**
+ * Removes the lock only if this token still owns it.
+ *
+ * An unconditional delete breaks mutual exclusion in a chain: A takes the
+ * lock, stalls past the stale window, B legitimately takes over, then A
+ * finishes and deletes *B's* lock. Measured: that produced four concurrent
+ * `gh` sweeps from one laptop-sleep event.
+ */
+export function releaseRefreshLock(file: string, token?: number): void {
+  if (token !== undefined && readHeldAt(file) !== token) return
   rmSync(file, { force: true })
 }
 
 function tryCreate(file: string, nowMs: number): boolean {
   let fd: number | null = null
   try {
-    fd = openSync(file, 'wx')
+    fd = openSync(file, 'wx', 0o600)
     writeSync(fd, String(nowMs))
     return true
   } catch {

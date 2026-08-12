@@ -66,7 +66,9 @@ export function writePrCache(file: string, cache: PrCache): void {
   mkdirSync(dirname(file), { recursive: true })
   const temp = `${file}.${process.pid}.tmp`
   try {
-    writeFileSync(temp, `${JSON.stringify(cache)}\n`, 'utf8')
+    // 0600, like the settings backup next door: this file carries private
+    // repository names and PR titles, and ~/.helm is world-readable.
+    writeFileSync(temp, `${JSON.stringify(cache)}\n`, { encoding: 'utf8', mode: 0o600 })
     renameSync(temp, file)
   } catch {
     // Losing the cache costs one extra `gh` call. Taking the board down over

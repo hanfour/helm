@@ -156,7 +156,8 @@ function readCache(file: string): Record<string, RolloutMeta | null> {
 function writeAtomic(file: string, value: unknown): void {
   const temp = `${file}.${process.pid}.tmp`
   try {
-    writeFileSync(temp, `${JSON.stringify(value)}\n`, 'utf8')
+    // 0600: this maps every project path on the machine.
+    writeFileSync(temp, `${JSON.stringify(value)}\n`, { encoding: 'utf8', mode: 0o600 })
     renameSync(temp, file)
   } catch {
     // Losing the cache costs 25 ms on the next poll and nothing else. Taking
