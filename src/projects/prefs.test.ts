@@ -4,9 +4,10 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, writeFil
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { readPrefs, writePrefs, setProjectPref } from './prefs.ts'
+import { tempDir } from '../temp-dir.ts'
 
 const tmpFile = (body?: string): string => {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-prefs-'))
+  const dir = tempDir('helm-prefs-')
   const f = join(dir, 'projects.json')
   if (body !== undefined) writeFileSync(f, body)
   return f
@@ -37,7 +38,7 @@ test('writePrefs 寫出的內容可被 readPrefs 讀回', () => {
 })
 
 test('writePrefs 會建立缺少的父目錄', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-prefs-'))
+  const dir = tempDir('helm-prefs-')
   const f = join(dir, 'nested', 'deep', 'projects.json')
   writePrefs(f, { version: 1, projects: {} })
   assert.equal(existsSync(f), true)
@@ -71,7 +72,7 @@ test('隔離失敗時回報 unreadable —— 絕不能與「已保存」混為�
   // 目錄不可寫時 rename 失敗，但就地截斷不需要目錄權限。舊實作把兩者
   // 都回報成 corrupt，呼叫端據此告訴使用者「原檔已保留」，接著就把它
   // 蓋掉了 —— 一個宣稱不可重建的檔案，靜默且不可回復地消失。
-  const dir = mkdtempSync(join(tmpdir(), 'helm-prefs-'))
+  const dir = tempDir('helm-prefs-')
   const f = join(dir, 'projects.json')
   writeFileSync(f, '{壞掉')
   chmodSync(dir, 0o555)
@@ -103,7 +104,7 @@ test('並行寫入不會產生半份 JSON', () => {
 })
 
 test('檔案不存在不算毀損', () => {
-  const out = readPrefs(join(mkdtempSync(join(tmpdir(), 'helm-prefs-')), 'nope.json'))
+  const out = readPrefs(join(tempDir('helm-prefs-'), 'nope.json'))
   assert.equal(out.health, 'ok')
 })
 

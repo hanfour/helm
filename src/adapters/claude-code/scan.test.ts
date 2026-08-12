@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { scanTranscripts } from './scan.ts'
+import { tempDir } from '../../temp-dir.ts'
 
 const NOW = Date.now()
 const DAY = 86_400_000
@@ -16,7 +17,7 @@ interface FileSpec {
 }
 
 function scaffold(files: readonly FileSpec[]): string {
-  const root = mkdtempSync(join(tmpdir(), 'helm-scan-'))
+  const root = tempDir('helm-scan-')
   for (const f of files) {
     const dir = f.nested === true ? join(root, f.slug, 'sidecar') : join(root, f.slug)
     mkdirSync(dir, { recursive: true })

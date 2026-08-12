@@ -4,9 +4,10 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readRegistry } from './registry.ts'
+import { tempDir } from '../../temp-dir.ts'
 
 function makeDir(files: Record<string, string>): string {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-reg-'))
+  const dir = tempDir('helm-reg-')
   for (const [name, body] of Object.entries(files)) {
     writeFileSync(join(dir, name), body)
   }

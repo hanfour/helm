@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { briefPathFor, defaultDeps, openSession, writeBriefFile } from './run.ts'
 import type { SessionState } from '../types.ts'
+import { tempDir } from '../temp-dir.ts'
 
 const session = (over: Partial<SessionState> = {}): SessionState => ({
   adapterId: 'claude-code', sessionId: 'sess-1', cwd: '/Users/t/proj', pid: null,
@@ -18,7 +19,7 @@ test('briefPathFor 以 session id 命名檔案', () => {
 })
 
 test('writeBriefFile 會自動建立不存在的目錄', () => {
-  const path = join(mkdtempSync(join(tmpdir(), 'helm-run-')), 'a', 'b', 'x.md')
+  const path = join(tempDir('helm-run-'), 'a', 'b', 'x.md')
   writeBriefFile(path, '# 內容')
   assert.equal(readFileSync(path, 'utf8'), '# 內容')
 })

@@ -5,9 +5,10 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readGitSnapshot } from './git.ts'
+import { tempDir } from '../temp-dir.ts'
 
 function repo(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-git-'))
+  const dir = tempDir('helm-git-')
   const run = (...args: string[]) =>
     execFileSync('git', args, { cwd: dir, stdio: 'ignore' })
   run('init', '-q')
@@ -34,7 +35,7 @@ test('有未 commit 變更時回傳 diff stat 與 status', () => {
 })
 
 test('非 git 目錄回傳空值而不拋錯', () => {
-  const s = readGitSnapshot(mkdtempSync(join(tmpdir(), 'helm-nogit-')))
+  const s = readGitSnapshot(tempDir('helm-nogit-'))
   assert.deepEqual(s, { diffStat: '', statusShort: '' })
 })
 

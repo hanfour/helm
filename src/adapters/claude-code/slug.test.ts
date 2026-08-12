@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSubdirReader, resolveSlug, slugifyCwd } from './slug.ts'
+import { tempDir } from '../../temp-dir.ts'
 
 /** A fake filesystem: absolute dir → its subdirectory names. */
 const fs = (tree: Record<string, string[]>) => ({
@@ -96,14 +97,14 @@ test('病態的目錄結構不會無限展開 —— 有步數上限', () => {
 })
 
 test('createSubdirReader 只回傳子目錄，忽略檔案', () => {
-  const root = mkdtempSync(join(tmpdir(), 'helm-slug-'))
+  const root = tempDir('helm-slug-')
   mkdirSync(join(root, 'sub'))
   writeFileSync(join(root, 'file.txt'), '')
   assert.deepEqual(createSubdirReader()(root).toSorted(), ['sub'])
 })
 
 test('createSubdirReader 把指向目錄的 symlink 也算進來（macOS 的 /var 就是）', () => {
-  const root = mkdtempSync(join(tmpdir(), 'helm-slug-'))
+  const root = tempDir('helm-slug-')
   mkdirSync(join(root, 'real'))
   symlinkSync(join(root, 'real'), join(root, 'link'))
   assert.deepEqual(createSubdirReader()(root).toSorted(), ['link', 'real'])
@@ -114,7 +115,7 @@ test('createSubdirReader 讀不到目錄時回傳空陣列而不是丟例外', (
 })
 
 test('createSubdirReader 對同一個目錄只讀一次', () => {
-  const root = mkdtempSync(join(tmpdir(), 'helm-slug-'))
+  const root = tempDir('helm-slug-')
   mkdirSync(join(root, 'a'))
   const read = createSubdirReader()
   const first = read(root)
@@ -125,7 +126,7 @@ test('createSubdirReader 對同一個目錄只讀一次', () => {
 })
 
 test('resolveSlug 走真實檔案系統也能反解', () => {
-  const root = mkdtempSync(join(tmpdir(), 'helm-slug-'))
+  const root = tempDir('helm-slug-')
   mkdirSync(join(root, 'data-svc-2.0'), { recursive: true })
   const slug = slugifyCwd(join(root, 'data-svc-2.0'))
   assert.equal(resolveSlug(slug, { subdirs: createSubdirReader() }), join(root, 'data-svc-2.0'))

@@ -7,9 +7,10 @@ import {
   readCache, writeCache, setBrief, getFreshBriefEntry, digestOf, EMPTY_CACHE,
 } from './store.ts'
 import type { Brief } from './store.ts'
+import { tempDir } from '../temp-dir.ts'
 
 const tmpFile = (body?: string): string => {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-cache-'))
+  const dir = tempDir('helm-cache-')
   const f = join(dir, 'cache.json')
   if (body !== undefined) writeFileSync(f, body)
   return f

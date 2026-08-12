@@ -4,9 +4,10 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readTranscriptDigest, DEFAULT_LIMITS } from './transcript.ts'
+import { tempDir } from '../../temp-dir.ts'
 
 function jsonl(records: object[]): string {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-tr-'))
+  const dir = tempDir('helm-tr-')
   const f = join(dir, 's.jsonl')
   writeFileSync(f, records.map((r) => JSON.stringify(r)).join('\n') + '\n')
   return f
@@ -123,7 +124,7 @@ test('gitBranch 取最後一筆有記錄的值', () => {
 })
 
 test('畸形行被跳過，不影響其餘解析', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-tr-'))
+  const dir = tempDir('helm-tr-')
   const f = join(dir, 's.jsonl')
   writeFileSync(f, `{壞掉\n${JSON.stringify(userText('好的', '2026-08-11T01:00:00.000Z'))}\n`)
   assert.deepEqual(readTranscriptDigest(f).prompts, ['好的'])

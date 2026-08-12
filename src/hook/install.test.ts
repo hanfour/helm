@@ -1,7 +1,7 @@
-import { test } from 'node:test'
+import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync,
   statSync, symlinkSync, writeFileSync,
 } from 'node:fs'
 import { execFileSync } from 'node:child_process'
@@ -12,6 +12,7 @@ import { resolvePaths } from '../paths.ts'
 import { installHook, uninstallHook } from './install.ts'
 import { hasHelmHook } from './settings.ts'
 import { fakePrefs, NO_PREFS } from './test-prefs.ts'
+import { tempDir } from '../temp-dir.ts'
 
 
 // Stateless by default: a shared mutable store would let the first test that
@@ -29,8 +30,21 @@ const DEPS = {
   ubersicht: NO_PREFS,
 }
 
+/**
+ * Every fixture home, so they can be removed at the end.
+ *
+ * `mkdtempSync` never cleans up after itself: a full run left about forty of
+ * these behind in the OS temp directory, every time.
+ */
+const HOMES: string[] = []
+
+after(() => {
+  for (const h of HOMES) rmSync(h, { recursive: true, force: true })
+})
+
 function home(settings?: object): string {
-  const h = mkdtempSync(join(tmpdir(), 'helm-install-'))
+  const h = tempDir('helm-install-')
+  HOMES.push(h)
   mkdirSync(join(h, '.claude'), { recursive: true })
   if (settings !== undefined) {
     writeFileSync(join(h, '.claude', 'settings.json'), JSON.stringify(settings, null, 2))
@@ -375,7 +389,10 @@ test('在精簡 PATH 下 wrapper 仍然跑得起來', () => {
   installHook(resolvePaths({ home: h }), { ...DEPS, nodeBin: process.execPath, repoRoot: REPO_ROOT })
   const out = execFileSync(join(h, '.local', 'bin', 'helm'), ['help'], {
     encoding: 'utf8',
-    env: { HOME: h, PATH: '/usr/bin:/bin:/usr/sbin:/sbin' },
+    // `env` 是整份取代 —— 不把 guard 傳下去的話，子行程裡它是關的，
+    // 而那正是兩次污染事故的形狀。目前這條跑的是 helm help（不碰偏好），
+    // 但沒有東西保證下一個人不會改成別的指令。
+    env: { HOME: h, PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HELM_NO_REAL_PREFS: '1' },
   })
   assert.match(out, /helm —/)
 })

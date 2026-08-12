@@ -5,6 +5,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFile
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HOOK_MARKER, buildHookCommand, recorderPath, shellQuote } from './snippet.ts'
+import { tempDir } from '../temp-dir.ts'
 
 interface Run {
   code: number
@@ -18,7 +19,7 @@ function runHook(payload: string, opts: {
   errorsLog?: string
   env?: Record<string, string>
 } = {}): Run {
-  const live = opts.liveDir ?? mkdtempSync(join(tmpdir(), 'helm-hook-'))
+  const live = opts.liveDir ?? tempDir('helm-hook-')
   const log = opts.errorsLog ?? join(live, 'errors.log')
   let code = 0
   try {
@@ -174,7 +175,7 @@ test('繼承的 SHELLOPTS=errexit 不再讓 hook 非零結束', () => {
 })
 
 test('live 目錄不存在時 exit 0，並把原因寫進錯誤紀錄', () => {
-  const log = join(mkdtempSync(join(tmpdir(), 'helm-hook-')), 'errors.log')
+  const log = join(tempDir('helm-hook-'), 'errors.log')
   const r = runHook(bash('npm test'), {
     liveDir: join(tmpdir(), 'helm-hook-does-not-exist'),
     errorsLog: log,
@@ -184,7 +185,7 @@ test('live 目錄不存在時 exit 0，並把原因寫進錯誤紀錄', () => {
 })
 
 test('live 目錄唯讀時 exit 0，且不留下暫存檔', () => {
-  const live = mkdtempSync(join(tmpdir(), 'helm-hook-'))
+  const live = tempDir('helm-hook-')
   chmodSync(live, 0o500)
   try {
     assert.equal(runHook(bash('npm test'), { liveDir: live }).code, 0)
@@ -203,7 +204,7 @@ test('連錯誤紀錄都寫不進去時仍然 exit 0', () => {
 })
 
 test('寫入是原子的 —— 不留暫存檔，且既有的合法 marker 不會被寫壞', () => {
-  const live = mkdtempSync(join(tmpdir(), 'helm-hook-'))
+  const live = tempDir('helm-hook-')
   runHook(bash('first'), { liveDir: live })
   runHook(bash('second'), { liveDir: live })
   assert.deepEqual(readdirSync(live).filter((n) => n.includes('.tmp')), [])
@@ -216,7 +217,7 @@ test('既有 marker 是唯讀時仍然更新得了 —— 原子寫換的是 ino
   // 把它寫成真的斷言之後才看到，實際行為跟名字說的相反 —— rename 只需要
   // 目錄的寫權限，不需要舊檔的。而那才是對的：marker 是 helm 自己的資料，
   // 一個唯讀的舊檔不該讓「此刻正在跑什麼」從此凍結在過去。
-  const live = mkdtempSync(join(tmpdir(), 'helm-hook-'))
+  const live = tempDir('helm-hook-')
   const target = join(live, `${ID}.json`)
   writeFileSync(target, '{"sessionId":"stale"}\n')
   chmodSync(target, 0o400)
@@ -239,7 +240,7 @@ test('buildHookCommand 產出單行、帶識別字、且路徑經過跳脫', () 
 })
 
 test('路徑含 $ 或引號時仍能正確執行', () => {
-  const live = mkdirSync(join(mkdtempSync(join(tmpdir(), 'helm-hook-')), 'we$ird "dir'), {
+  const live = mkdirSync(join(tempDir('helm-hook-'), 'we$ird "dir'), {
     recursive: true,
   }) as string
   const r = runHook(bash('npm test'), { liveDir: live })

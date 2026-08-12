@@ -6,9 +6,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readLiveMarker } from './live.ts'
 import { buildHookCommand } from '../hook/snippet.ts'
+import { tempDir } from '../temp-dir.ts'
 
 function liveDir(files: Record<string, string>): string {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-live-'))
+  const dir = tempDir('helm-live-')
   mkdirSync(dir, { recursive: true })
   for (const [n, b] of Object.entries(files)) writeFileSync(join(dir, n), b)
   return dir
@@ -57,7 +58,7 @@ test('session id 含路徑分隔字元時拒絕讀取（防目錄穿越）', () 
 })
 
 test('ts 取檔案 mtime，而不是檔案內容裡的 0', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-live-'))
+  const dir = tempDir('helm-live-')
   const before = Date.now()
   writeFileSync(join(dir, 'sess-1.json'),
     '{"sessionId":"sess-1","ts":0,"toolName":"Bash","summary":"npm test"}\n')
@@ -69,7 +70,7 @@ test('ts 取檔案 mtime，而不是檔案內容裡的 0', () => {
 test('hook 實際寫出的內容能被 readLiveMarker 直接吃下', () => {
   // 這是本 task 最重要的一個測試：shell 那端與 TypeScript 這端的契約，
   // 只有它守著。兩邊分開改的時候，只有它會出聲。
-  const dir = mkdtempSync(join(tmpdir(), 'helm-live-'))
+  const dir = tempDir('helm-live-')
   const id = 'aaaa1111-0000-1111-2222-333344445555'
   execFileSync('sh', ['-c', buildHookCommand(dir, join(dir, 'errors.log'))], {
     input: JSON.stringify({

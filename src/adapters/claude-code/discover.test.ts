@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { resolvePaths } from '../../paths.ts'
 import { discoverClaudeCode, type DiscoverDeps } from './discover.ts'
+import { tempDir } from '../../temp-dir.ts'
 
 const NOW = Date.UTC(2026, 7, 11, 12, 0, 0)
 const DAY = 86_400_000
@@ -23,7 +24,7 @@ interface TranscriptSpec {
 }
 
 function scaffold(sessions: object[], transcripts: readonly TranscriptSpec[] = []): string {
-  const home = mkdtempSync(join(tmpdir(), 'helm-disc-'))
+  const home = tempDir('helm-disc-')
   mkdirSync(join(home, '.claude', 'sessions'), { recursive: true })
   for (const s of sessions) {
     const pid = (s as { pid: number }).pid

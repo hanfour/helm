@@ -13,7 +13,14 @@ after(SCRATCH.cleanup)
  * settings of an app the user actually runs — which is how one of these tests
  * pointed Übersicht at a temp directory it then deleted.
  */
-const FAKE = { swiftbar: NO_PREFS, ubersicht: NO_PREFS }
+// 兩個 app 一律當成已安裝。讀 /Applications 的話，這些測試的行為會
+// 取決於跑測試的機器 —— 在沒裝的機器上整段分支根本不會被執行。
+const FAKE = {
+  swiftbar: NO_PREFS,
+  ubersicht: NO_PREFS,
+  swiftbarInstalled: true,
+  ubersichtInstalled: true,
+}
 
 const settingsOf = (home: string): unknown =>
   JSON.parse(readFileSync(join(home, '.claude', 'settings.json'), 'utf8'))

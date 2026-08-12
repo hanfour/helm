@@ -1,4 +1,4 @@
-import { test } from 'node:test'
+import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync,
@@ -13,6 +13,7 @@ import type { Board } from '../board.ts'
 import type { SessionState } from '../types.ts'
 import { fakePrefs, NO_PREFS } from './test-prefs.ts'
 import { installHook } from './install.ts'
+import { tempDir } from '../temp-dir.ts'
 
 const NOW = Date.UTC(2026, 7, 11, 12, 0, 0)
 const DAY = 86_400_000
@@ -37,8 +38,15 @@ const board = (
   ...over,
 })
 
+const HOMES: string[] = []
+
+after(() => {
+  for (const h of HOMES) rmSync(h, { recursive: true, force: true })
+})
+
 function home(): string {
-  const h = mkdtempSync(join(tmpdir(), 'helm-doctor-'))
+  const h = tempDir('helm-doctor-')
+  HOMES.push(h)
   mkdirSync(join(h, '.claude'), { recursive: true })
   writeFileSync(join(h, '.claude', 'settings.json'), '{}')
   return h
