@@ -801,3 +801,19 @@ test('uninstall 也清掉 widget 用的 shim', () => {
   uninstallHook(paths, deps)
   assert.equal(existsSync(shim), false, 'shim 是 helm 寫的，要清掉')
 })
+
+test('資料夾不可用時要說出原因，而不是默默跳過', () => {
+  // `resolveScannedDir` produces the explanation; install has to print it.
+  // Dropping that one line left the user with an install that reported
+  // success and a menu bar that never appeared.
+  const h = home({})
+  const report = installHook(resolvePaths({ home: h }), {
+    ...DEPS,
+    swiftbar: { readPref: () => ({ kind: 'set', value: 'relative-path' }), writePref: () => {}, clearPref: () => {} },
+  })
+  assert.ok(
+    report.warnings.some((w) => w.includes('絕對路徑')),
+    `要說出為什麼沒裝：${report.warnings.join('\n')}`,
+  )
+  assert.equal(existsSync(join(h, 'SwiftBar', 'helm.5s.sh')), false)
+})

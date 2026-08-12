@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { prefsFor } from './defaults.ts'
+import { isMissingKey, prefsFor, type PrefsExec } from './defaults.ts'
 
 /**
  * A throwaway domain of our own, so this never touches an app the user runs.
@@ -131,4 +131,32 @@ test('讀取失敗回報 unreadable —— 混成「沒設定」就會覆寫使�
   for (let i = 0; i < 8; i++) write(`bulk${i}`, '-string', big)
   write('needle', '-string', '/h/w')
   assert.deepEqual(prefs.readPref('needle'), { kind: 'set', value: '/h/w' }, '大 domain 也要讀得到')
+})
+
+test('只有「exit 1 且沒有 errno」才算沒設定，其餘都是讀取失敗', () => {
+  // This one predicate decides whether adopt* may overwrite the folder the
+  // user chose. Collapsing the two is how a 1.2 MB domain's ENOBUFS turned
+  // into "this app was never configured".
+  assert.equal(isMissingKey({ status: 1 }), true, 'key 不存在')
+  assert.equal(isMissingKey({ status: 1, code: 'ENOBUFS' }), false, 'buffer 爆掉不是沒設定')
+  assert.equal(isMissingKey({ status: 1, signal: 'SIGKILL' }), false, '被砍掉不是沒設定')
+  assert.equal(isMissingKey({ status: 127 }), false, '找不到指令不是沒設定')
+  assert.equal(isMissingKey({ status: null }), false)
+  assert.equal(isMissingKey({ code: 'ENOENT' }), false, 'plutil 不在不是沒設定')
+})
+
+test('讀取失敗時回 unreadable，絕不回 unset —— unset 等於授權覆寫', () => {
+  // The branch that matters most and the one a test cannot reach from
+  // outside: there is no way to make the real `defaults` throw ENOBUFS on
+  // demand. Injected, so collapsing it into `unset` cannot slip through.
+  const failWith = (err: object): PrefsExec => ({
+    exportDomain: () => { throw Object.assign(new Error('boom'), err) },
+    extract: () => '',
+  })
+  for (const err of [{ status: 1, code: 'ENOBUFS' }, { status: 127 }, { signal: 'SIGKILL' }]) {
+    const r = prefsFor(`${TEST_DOMAIN}.injected`, failWith(err)).readPref('widgetDir')
+    assert.equal(r.kind, 'unreadable', JSON.stringify(err))
+  }
+  const missing = prefsFor(`${TEST_DOMAIN}.injected`, failWith({ status: 1 })).readPref('widgetDir')
+  assert.equal(missing.kind, 'unset', 'key 不存在仍然是 unset')
 })

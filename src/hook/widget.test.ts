@@ -222,6 +222,21 @@ test('位置被夾在畫面內，而且夾在確定的位置', () => {
   assert.deepEqual(clampPos({ top: 10, left: 10 }, 20, 20), { top: 0, left: 0 }, '視窗比邊界還小時不得為負')
 })
 
+test('模組載入時 pos 就已經夾好 —— 這是唯一會在畫面外救回卡片的時機', () => {
+  // Asserting on clampPos and loadPos separately left the wiring between them
+  // unguarded: `let pos = loadPos()` (no clamp) passed every one of those.
+  const block = /\/\/ --- helm:logic ---[^\n]*\n([\s\S]*?)\/\/ --- \/helm:logic ---/
+    .exec(widget())?.[1]
+  assert.ok(block)
+  const stored = { 'helm.widget.pos': JSON.stringify({ top: 1400, left: 3200 }) }
+  const pos = new Function('localStorage', 'window', `${block}\nreturn pos`)(
+    { getItem: (k: string) => stored[k as keyof typeof stored] ?? null, setItem: () => {} },
+    { innerWidth: 1440, innerHeight: 900 },
+  ) as { top: number; left: number }
+  assert.ok(pos.top < 900, `top=${pos.top} 在 900 高的畫面外`)
+  assert.ok(pos.left < 1440, `left=${pos.left} 在 1440 寬的畫面外`)
+})
+
 test('存過的位置在載入時就夾一次 —— 換小螢幕之後不能就此消失', () => {
   // clampPos only ran while dragging, so a card parked at the corner of an
   // external display landed off-screen on the laptop panel: unreachable by

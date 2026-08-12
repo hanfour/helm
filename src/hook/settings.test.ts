@@ -217,3 +217,21 @@ test('沒有 helm 的 hook 時 removeHelmHook 原樣回傳 —— 不順手刪�
     assert.deepEqual(removeHelmHook(settings), settings, JSON.stringify(settings))
   }
 })
+
+test('只有 exec 開頭加 marker 還不算 helm 的 —— 三個指紋要全中', () => {
+  // Trimming COMMAND_SIGNS down to just `exec ` survived the suite: the only
+  // near-miss fixture failed on `record.mjs`, so no test ever exercised the
+  // other two signs. A third-party hook that happens to start with `exec` and
+  // mentions the marker would then be deleted by uninstall.
+  for (const command of [
+    `exec /usr/local/bin/audit-hooks # ${HOOK_MARKER}`,
+    `exec '/abs/node' /other/tool.mjs # ${HOOK_MARKER}`,
+    `exec '/abs/node' --no-warnings /other/tool.mjs # ${HOOK_MARKER}`,
+  ]) {
+    const foreign = {
+      hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command }] }] },
+    }
+    assert.equal(hasHelmHook(foreign), false, command)
+    assert.deepEqual(removeHelmHook(foreign), foreign, command)
+  }
+})

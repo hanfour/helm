@@ -20,11 +20,45 @@ export interface PrefsIO {
   clearPref: (key: string) => void
 }
 
-export function prefsFor(bundleId: string): PrefsIO {
+/**
+ * Big enough that no real preference domain reaches it. The default is 1 MB,
+ * and a 1.2 MB domain was enough to throw ENOBUFS — which the old code caught
+ * and reported as "this app has no setting yet".
+ */
+const MAX_OUTPUT_BYTES = 64 * 1024 * 1024
+
+/**
+ * The two commands a read needs, injectable.
+ *
+ * Not for convenience: the `unreadable` branch decides whether helm may
+ * overwrite the folder the user chose, and there is no way to make the real
+ * `defaults` fail with ENOBUFS — or vanish from PATH — from inside a test.
+ * Without this the branch is unreachable, and a mutation that collapsed it
+ * into `unset` survived the whole suite.
+ */
+export interface PrefsExec {
+  exportDomain: (bundleId: string) => Buffer
+  extract: (key: string, plist: Buffer) => string
+}
+
+const realExec: PrefsExec = {
+  exportDomain: (bundleId) => execFileSync('defaults', ['export', bundleId, '-'], {
+    stdio: ['ignore', 'pipe', 'ignore'],
+    maxBuffer: MAX_OUTPUT_BYTES,
+  }),
+  extract: (key, plist) => execFileSync('plutil', ['-extract', key, 'xml1', '-o', '-', '-'], {
+    input: plist,
+    encoding: 'utf8',
+    stdio: ['pipe', 'pipe', 'ignore'],
+    maxBuffer: MAX_OUTPUT_BYTES,
+  }),
+}
+
+export function prefsFor(bundleId: string, exec: PrefsExec = realExec): PrefsIO {
   return {
     readPref: (key) => {
       guard(bundleId, `read ${key}`)
-      return readPref(bundleId, key)
+      return readPref(bundleId, key, exec)
     },
     writePref: (key, value) => {
       guard(bundleId, `write ${key}=${value}`)
@@ -61,13 +95,6 @@ function guard(bundleId: string, what: string): void {
 }
 
 /**
- * Big enough that no real preference domain reaches it. The default is 1 MB,
- * and a 1.2 MB domain was enough to throw ENOBUFS — which the old code caught
- * and reported as "this app has no setting yet".
- */
-const MAX_OUTPUT_BYTES = 64 * 1024 * 1024
-
-/**
  * Read as XML, not as `defaults read` and not as `plutil … raw`.
  *
  * `defaults read <domain> <key>` prints old-style plist, which escapes every
@@ -83,19 +110,10 @@ const MAX_OUTPUT_BYTES = 64 * 1024 * 1024
  *
  * XML carries the type, so anything that is not `<string>` can be refused.
  */
-function readPref(bundleId: string, key: string): PrefRead {
+function readPref(bundleId: string, key: string, exec: PrefsExec): PrefRead {
   let xml: string
   try {
-    const plist = execFileSync('defaults', ['export', bundleId, '-'], {
-      stdio: ['ignore', 'pipe', 'ignore'],
-      maxBuffer: MAX_OUTPUT_BYTES,
-    })
-    xml = execFileSync('plutil', ['-extract', key, 'xml1', '-o', '-', '-'], {
-      input: plist,
-      encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'ignore'],
-      maxBuffer: MAX_OUTPUT_BYTES,
-    })
+    xml = exec.extract(key, exec.exportDomain(bundleId))
   } catch (err) {
     // Both commands exit non-zero when the key or the domain does not exist,
     // which is the normal state before an app has been configured. Anything
@@ -124,8 +142,12 @@ function readPref(bundleId: string, key: string): PrefRead {
  * `defaults`/`plutil` exit 1 with an empty stdout for a key that is not there.
  * A read that failed for any other reason produces a signal, a different exit
  * status, or an errno — none of which mean "not set".
+ *
+ * Exported for the tests: the difference decides whether `adoptWidgetDir` may
+ * overwrite the folder the user chose, and reproducing an ENOBUFS or a missing
+ * `plutil` from the outside is not something a test can do reliably.
  */
-function isMissingKey(err: unknown): boolean {
+export function isMissingKey(err: unknown): boolean {
   const e = err as { status?: number | null; signal?: string | null; code?: string }
   if (e.signal != null) return false
   if (typeof e.code === 'string' && e.code !== '') return false
