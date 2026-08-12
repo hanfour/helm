@@ -119,9 +119,16 @@ Unknown JSON field: "reviewDecision"
 
 ### Task 4：`helm pr-refresh` 與背景 fork
 
-- [ ] 測試：fork 出去的行程 detached 且不繼承 stdio（否則 SwiftBar 會等它）、失敗不影響呼叫端
-- [ ] **效能驗證**：`helm menu` 的行程內部耗時不得增加超過 5 ms
-- [ ] 紅 → 實作 → 綠 → commit
+- [x] 測試：失敗不影響呼叫端、鎖被持有時不 spawn、過期時仍回舊資料
+- [x] 紅 → 實作 → 綠 → commit
+- [x] **真機端到端**：`helm pr-refresh` 1.87 秒，抓到 `onead/erp#4853`，判定「等 CI」
+
+**實作時想清楚的一件事**：鎖在 `kickRefreshIfStale` 裡先探一次再 spawn。
+只為了讓子行程立刻退出而 fork 一個 Node，在每 5 秒的路徑上要付約 40 ms。
+
+**還沒接的**：`helm menu` 目前還沒呼叫 `kickRefreshIfStale`，也還沒畫出來 ——
+那是 Task 5 連同兩個呈現面一起做，因為 detached spawn 的驗證要跟真正的
+渲染路徑一起才有意義。
 
 ### Task 5：畫進兩個呈現面
 

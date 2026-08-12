@@ -15,6 +15,7 @@ const USAGE = `helm — 本機 agent CLI 艦隊看板
   helm pin|unpin <專案>               釘選／取消釘選（釘選的專案不受 14 天窗口約束）
   helm hide|show <專案>               隱藏／取消隱藏
   helm menu                           輸出 SwiftBar 格式（由選單列 plugin 呼叫）
+  helm pr-refresh                     在背景更新 PR 狀態（由看板自己呼叫）
   helm doctor                         檢查 hook、快取與資料來源是否正常
   helm help                           顯示本說明
 
@@ -36,6 +37,8 @@ async function main(argv: readonly string[]): Promise<number> {
       return (await import('./status.ts')).runStatus(rest)
     case 'scan':
       return (await import('./status.ts')).runStatus([...rest, '--json'])
+    case 'pr-refresh':
+      return (await import('./pr-refresh.ts')).runPrRefresh(rest)
     case 'menu':
       return (await import('./menu.ts')).runMenu(rest)
     case 'sessions':
