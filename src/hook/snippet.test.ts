@@ -211,14 +211,20 @@ test('寫入是原子的 —— 不留暫存檔，且既有的合法 marker 不�
   assert.equal((JSON.parse(body) as { summary: string }).summary, 'second')
 })
 
-test('既有 marker 是唯讀時，寫入失敗但不破壞它', () => {
+test('既有 marker 是唯讀時仍然更新得了 —— 原子寫換的是 inode', () => {
+  // 這條原本叫做「寫入失敗但不破壞它」，斷言是 assert.ok(… || true)：恆真。
+  // 把它寫成真的斷言之後才看到，實際行為跟名字說的相反 —— rename 只需要
+  // 目錄的寫權限，不需要舊檔的。而那才是對的：marker 是 helm 自己的資料，
+  // 一個唯讀的舊檔不該讓「此刻正在跑什麼」從此凍結在過去。
   const live = mkdtempSync(join(tmpdir(), 'helm-hook-'))
   const target = join(live, `${ID}.json`)
-  writeFileSync(target, '{"sessionId":"keep"}\n')
+  writeFileSync(target, '{"sessionId":"stale"}\n')
   chmodSync(target, 0o400)
   try {
     assert.equal(runHook(bash('npm test'), { liveDir: live }).code, 0)
-    assert.ok(readFileSync(target, 'utf8').includes('keep') || true)
+    const after = JSON.parse(readFileSync(target, 'utf8')) as { summary: string }
+    assert.equal(after.summary, 'npm test')
+    assert.deepEqual(readdirSync(live).filter((n) => n.includes('.tmp')), [], '不留暫存檔')
   } finally {
     chmodSync(target, 0o600)
   }

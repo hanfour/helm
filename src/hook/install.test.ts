@@ -560,3 +560,58 @@ test('目標是 symlink 時不寫也不刪 —— 那會寫到宣告範圍之外
     `要說出來：${report.warnings.join('\n')}`,
   )
 })
+
+test('~/.local/bin 不在 PATH 上時提醒，在的話不囉嗦', () => {
+  // `onPath()` returning true unconditionally survived the whole suite: the
+  // warning had no test at all, so a user could install and then find that
+  // typing `helm` did nothing, with install having said everything was fine.
+  const h = home({})
+  const bin = join(h, '.local', 'bin')
+  const before = process.env['PATH']
+  try {
+    process.env['PATH'] = '/usr/bin:/bin'
+    const off = installHook(resolvePaths({ home: h }), DEPS)
+    assert.ok(off.warnings.some((w) => w.includes(bin) && w.includes('PATH')), off.warnings.join('\n'))
+
+    // Trailing slash included, because the comparison resolves paths.
+    process.env['PATH'] = `/usr/bin:${bin}/`
+    const on = installHook(resolvePaths({ home: h }), DEPS)
+    assert.ok(!on.warnings.some((w) => w.includes('PATH')), on.warnings.join('\n'))
+  } finally {
+    if (before === undefined) delete process.env['PATH']
+    else process.env['PATH'] = before
+  }
+})
+
+test('uninstall 也清得掉搬家前那個位置的 plugin', () => {
+  // Dropping that path from the list survived: someone upgrading from an
+  // earlier install keeps a live plugin in ~/Library/Application Support,
+  // still running every five seconds after they thought they had removed it.
+  const h = home({})
+  const paths = resolvePaths({ home: h })
+  installHook(paths, DEPS)
+  const legacy = join(h, 'Library', 'Application Support', 'SwiftBar', 'helm.5s.sh')
+  mkdirSync(dirname(legacy), { recursive: true })
+  writeFileSync(legacy, '#!/bin/sh\nexec helm menu\n# HELM_LIVE_MARKER\n')
+
+  uninstallHook(paths, DEPS)
+  assert.equal(existsSync(legacy), false, '舊位置的 plugin 也要清掉')
+})
+
+test('widget 是 0644，plugin 是 0755 —— 一個是模組，一個是程式', () => {
+  const h = home({})
+  const ub = fakePrefs()
+  installHook(resolvePaths({ home: h }), { ...DEPS, ubersichtInstalled: true, ubersicht: ub })
+  const widget = join(h, 'Library', 'Application Support', 'Übersicht', 'widgets', 'helm.jsx')
+  assert.equal(statSync(widget).mode & 0o777, 0o644)
+  assert.equal(statSync(join(h, 'SwiftBar', 'helm.5s.sh')).mode & 0o777, 0o755)
+})
+
+test('新建的 settings.json 用兩空白縮排', () => {
+  // The fallback indent had no test, so a fresh install writing 4-space JSON
+  // into a file the user keeps in git would go unnoticed.
+  const h = home()
+  installHook(resolvePaths({ home: h }), DEPS)
+  const body = readFileSync(join(h, '.claude', 'settings.json'), 'utf8')
+  assert.match(body, /\n {2}"hooks"/, body.slice(0, 120))
+})

@@ -1,6 +1,7 @@
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
+import { chmodSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { scaffoldHome, SCRATCH } from './test-helpers.ts'
 
@@ -63,11 +64,13 @@ test('管線提早關閉時退出碼不是失敗碼', () => {
   assert.ok(r.code === 0 || r.code === 141, `退出碼 ${r.code}`)
 })
 
-test('未知指令仍然回傳 2 並印出用法', () => {
-  // No fixture: an unknown command must be rejected before anything is read.
-  const r = run(`"$HELM_ENTRY" nope 2>&1 || true`, SCRATCH.root)
-  assert.match(r.out, /未知指令：nope/)
-  assert.match(r.out, /用法：/)
+test('未知指令回傳 2 並印出用法', () => {
+  // `|| true` used to swallow the exit code here, and nothing asserted on
+  // `r.code` at all — so changing `return 2` to `return 0` passed.
+  const r = run(`"$HELM_ENTRY" nope`, SCRATCH.root)
+  assert.equal(r.code, 2)
+  assert.match(r.err, /未知指令：nope/)
+  assert.match(r.err, /用法：/)
 })
 
 test('HELM_FAKE_HOME 也要隔離偏好 —— 否則端對端測試會讀寫使用者真實 app 的設定', () => {
@@ -83,4 +86,55 @@ test('HELM_FAKE_HOME 也要隔離偏好 —— 否則端對端測試會讀寫使
     !swiftbarLine.includes('/Users/') || swiftbarLine.includes(h),
     `不該提到假家目錄以外的路徑：${swiftbarLine}`,
   )
+})
+
+test('stderr 被提早關掉時同樣安靜 —— helm doctor 2>&1 | head 是常見用法', () => {
+  // The handler covered stdout only, so redirecting stderr into a closed pipe
+  // still produced the twelve-line stack trace it was written to prevent.
+  const r = run(`"$HELM_ENTRY" status --json 2>&1 | head -c 200`, BIG_HOME)
+  assert.doesNotMatch(r.err, /EPIPE/, r.err)
+  assert.doesNotMatch(r.err, /at .*node:internal/, r.err)
+})
+
+test('EPIPE 以外的串流錯誤仍然往外丟 —— 不是吞掉所有東西', () => {
+  // Swallowing every stream error was indistinguishable from swallowing
+  // EPIPE alone under the old assertions.
+  const src = readFileSync(ENTRY, 'utf8')
+  assert.match(src, /err\.code !== 'EPIPE'/, '必須只放行 EPIPE')
+  assert.match(src, /throw err/)
+})
+
+test('內部出錯時印出可讀的訊息、提示 HELM_DEBUG，並回傳 1', () => {
+  // The whole top-level catch — message, hint, exit code — had no test:
+  // turning `return 1` into `return 0`, or deleting the message entirely,
+  // both passed. The user would get a raw UnhandledPromiseRejection instead.
+  const h = scaffoldHome([{ project: 'p', sessions: [{ id: 'cccc3333-0000-1111-2222-333344445555' }] }])
+  chmodSync(h, 0o500)
+  try {
+    const r = run(`"$HELM_ENTRY" pin p`, h)
+    assert.equal(r.code, 1, `stdout=${r.out} stderr=${r.err}`)
+    assert.match(r.err, /helm 失敗了/)
+    assert.match(r.err, /HELM_DEBUG/)
+    assert.doesNotMatch(r.err, /UnhandledPromiseRejection/)
+  } finally {
+    chmodSync(h, 0o700)
+  }
+})
+
+test('helm scan 等同 status --json', () => {
+  const r = run(`"$HELM_ENTRY" scan`, BIG_HOME)
+  assert.equal(r.code, 0, r.err)
+  assert.doesNotThrow(() => JSON.parse(r.out) as unknown, r.out.slice(0, 200))
+})
+
+test('不給指令時預設是 status，不是 help', () => {
+  const r = run(`"$HELM_ENTRY"`, BIG_HOME)
+  assert.equal(r.code, 0, r.err)
+  assert.doesNotMatch(r.out, /用法：/, '預設應該是看板，不是說明')
+})
+
+test('helm help 印出用法並回傳 0', () => {
+  const r = run(`"$HELM_ENTRY" help`, SCRATCH.root)
+  assert.equal(r.code, 0)
+  assert.match(r.out, /用法：/)
 })

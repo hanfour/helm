@@ -428,3 +428,54 @@ test('資料來源還沒建立時算正常 —— Claude Code 第一次跑之前
   const c = find(checksOf(home()), '資料來源')
   assert.equal(c?.ok, true, c?.detail)
 })
+
+test('清掉的數量只算真的刪成功的 —— 用呼叫次數會灌水', () => {
+  // `rmSync` with `force` does not complain about a file that vanished
+  // between the listing and the delete, so counting attempts reports work
+  // that never happened. The existing test only covered the throwing path.
+  const h = home()
+  const live = join(h, '.helm', 'live')
+  mkdirSync(live, { recursive: true })
+  const id = 'dddd4444-0000-1111-2222-333344445555'
+  const file = join(live, `${id}.json`)
+  writeFileSync(file, marker(id))
+  const old = (Date.now() - 40 * 86_400_000) / 1000
+  utimesSync(file, old, old)
+
+  const first = sweepStaleLive(resolvePaths({ home: h }), board(), Date.now())
+  assert.equal(first.length, 1)
+  const second = sweepStaleLive(resolvePaths({ home: h }), board(), Date.now())
+  assert.deepEqual(second, [], '已經不在的檔案不算數')
+})
+
+test('孤兒的年齡界線是 30 天 —— 29 天留著，31 天清掉', () => {
+  // Neither side of the boundary was tested, so shrinking it to 3 days passed
+  // — and the evidence of a crash would be swept ten times sooner.
+  const h = home()
+  const live = join(h, '.helm', 'live')
+  mkdirSync(live, { recursive: true })
+  const write = (id: string, days: number) => {
+    const f = join(live, `${id}.json`)
+    writeFileSync(f, marker(id))
+    const t = (Date.now() - days * 86_400_000) / 1000
+    utimesSync(f, t, t)
+    return f
+  }
+  const young = write('eeee5555-0000-1111-2222-333344445555', 29)
+  const aged = write('ffff6666-0000-1111-2222-333344445555', 31)
+
+  sweepStaleLive(resolvePaths({ home: h }), board(), Date.now())
+  assert.equal(existsSync(young), true, '29 天還不算孤兒')
+  assert.equal(existsSync(aged), false, '31 天要清掉')
+})
+
+test('錯誤紀錄印出最後 5 行 —— 少了就看不出模式', () => {
+  const h = home()
+  mkdirSync(join(h, '.helm'), { recursive: true })
+  const lines = Array.from({ length: 12 }, (_, i) => `error-${i}`)
+  writeFileSync(join(h, '.helm', 'hook-errors.log'), `${lines.join('\n')}\n`)
+  const c = find(checksOf(h), '錯誤紀錄')
+  assert.ok(c?.detail.includes('error-11'), c?.detail)
+  assert.ok(c?.detail.includes('error-7'), `要有五行：${c?.detail}`)
+  assert.ok(!c?.detail.includes('error-6'), `不該超過五行：${c?.detail}`)
+})
