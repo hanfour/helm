@@ -1,4 +1,7 @@
+import { join } from 'node:path'
 import { readTranscriptDigest, type TranscriptDigest } from '../adapters/claude-code/transcript.ts'
+import { codexPrompts } from '../adapters/codex/history.ts'
+import { CODEX_ADAPTER_ID } from '../adapters/codex/discover.ts'
 import type { Brief } from '../cache/store.ts'
 import { digestOf, getFreshBriefEntry, readCache, setBrief, writeCache } from '../cache/store.ts'
 import type { HelmPaths } from '../paths.ts'
@@ -49,7 +52,7 @@ export async function briefMarkdownFor(
     }
   }
 
-  const digest = readTranscriptDigest(session.transcriptPath ?? '')
+  const digest = digestFor(session, paths)
   if (nothingToSummarize(session, digest)) {
     return { markdown: renderNothingToSummarize(), ok: false }
   }
@@ -80,6 +83,32 @@ export async function briefMarkdownFor(
  * the answer can never be cached — so the same minute is spent again on every
  * single retry.
  */
+/**
+ * Where a session's meaning comes from, which differs per CLI.
+ *
+ * A Codex rollout is not a Claude Code transcript — reading one with
+ * `readTranscriptDigest` yields an empty digest, so the brief would report
+ * "nothing to summarise" for a session the user sent a dozen prompts to.
+ * Codex writes those prompts to `~/.codex/history.jsonl` instead, which is
+ * the same semantic layer for free.
+ *
+ * The other fields stay empty: touched files and tool calls live inside the
+ * rollout's own event stream, and parsing that is slow-path work this does
+ * not need — the prompts alone carry what the brief is for.
+ */
+export function digestFor(session: SessionState, paths: HelmPaths): TranscriptDigest {
+  if (session.adapterId !== CODEX_ADAPTER_ID) {
+    return readTranscriptDigest(session.transcriptPath ?? '')
+  }
+  return {
+    prompts: codexPrompts(join(paths.home, '.codex', 'history.jsonl'), session.sessionId),
+    touchedFiles: [],
+    recentTools: [],
+    lastTs: null,
+    gitBranch: null,
+  }
+}
+
 function nothingToSummarize(session: SessionState, digest: TranscriptDigest): boolean {
   if (session.transcriptPath === null) return true
   return digest.prompts.length === 0 && digest.recentTools.length === 0

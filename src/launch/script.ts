@@ -50,7 +50,12 @@ export function buildResumeCommand(
       // positional argument and can be sent along with the resume.
       return `claude --resume ${shellQuote(sessionId)} ${shellQuote(opening)}`
     case 'codex':
-      return `codex resume ${shellQuote(sessionId)}`
+      // Verified against `codex resume --help`: usage is
+      // `codex resume [OPTIONS] [SESSION_ID] [PROMPT]`, so the opening message
+      // is a positional argument here too. Without it the user resumes into a
+      // session with no idea a brief was written for them — which is the whole
+      // point of `helm open`.
+      return `codex resume ${shellQuote(sessionId)} ${shellQuote(opening)}`
     default:
       // Refuse rather than guess. Running the wrong CLI against a session id
       // is not something the user can undo by reading an error afterwards.

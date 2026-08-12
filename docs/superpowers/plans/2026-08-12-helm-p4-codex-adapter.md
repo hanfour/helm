@@ -192,11 +192,16 @@ uptime 起算前的 dyld 與 V8 初始化（約 40 ms）約 150 ms，仍在 200 
 
 **Interfaces:** Produces `codexPrompts(historyPath, sessionId): string[]`、resume 指令 `codex resume <session_id>`
 
-- [ ] **Step 1：寫失敗測試**——`history.jsonl` 只有 60/192 個 session 有記錄（沒送過 prompt 的就沒有），所以「找不到」是正常狀態不是錯誤；壞掉的行略過而不是整批失敗；`helm open` 對 codex session 送出的是 `codex resume`
-- [ ] **Step 2：紅**
-- [ ] **Step 3：實作**
-- [ ] **Step 4：綠**
-- [ ] **Step 5：commit**
+- [x] **Step 1：寫失敗測試**——`history.jsonl` 只有 60/192 個 session 有記錄（沒送過 prompt 的就沒有），所以「找不到」是正常狀態不是錯誤；壞掉的行略過而不是整批失敗；`helm open` 對 codex session 送出的是 `codex resume`
+- [x] **Step 2：紅**
+- [x] **Step 3：實作**
+- [x] **Step 4：綠**
+- [x] **Step 5：實測發現的一件規格沒寫的事**——`codex resume --help` 的 usage 是
+  `codex resume [OPTIONS] [SESSION_ID] [PROMPT]`：**PROMPT 是位置參數**，跟
+  `claude` 一樣。原本的實作沒傳，使用者接手 Codex session 時完全看不到
+  「去讀那份簡報」——而那正是 `helm open` 的重點。已補上。
+- [x] **Step 6：驗證**——12 個近期 session 有 8 個在 `history.jsonl` 裡取得到 prompt，內容正確
+- [x] **Step 7：commit**
 
 ---
 

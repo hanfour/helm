@@ -129,3 +129,22 @@ test('detectTerminal 在 iTerm 存在時選 iterm', () => {
 test('detectTerminal 在 iTerm 不存在時退回 terminal', () => {
   assert.equal(detectTerminal(() => false), 'terminal')
 })
+
+test('codex resume 也帶著開場訊息 —— 那是接手時唯一看得到的東西', () => {
+  // 實測 `codex resume --help`：usage 是
+  //   codex resume [OPTIONS] [SESSION_ID] [PROMPT]
+  // PROMPT 是位置參數，跟 claude 一樣。不傳的話使用者接手 Codex session
+  // 時完全看不到「去讀那份簡報」，而那正是 helm open 的重點。
+  const cmd = buildResumeCommand('codex', 'abc-123', '先讀 /tmp/brief.md')
+  assert.match(cmd, /^codex resume /)
+  assert.ok(cmd.includes('abc-123'))
+  assert.ok(cmd.includes('先讀 /tmp/brief.md'), cmd)
+})
+
+test('codex 的 session id 與開場訊息都經過跳脫', () => {
+  const cmd = buildResumeCommand('codex', "id'; rm -rf ~", "說明'; whoami")
+  const out = execFileSync('/bin/sh', ['-c', `printf '%s\\n' ${cmd.replace(/^codex resume /, '')}`], {
+    encoding: 'utf8',
+  })
+  assert.deepEqual(out.split('\n').slice(0, -1), ["id'; rm -rf ~", "說明'; whoami"])
+})

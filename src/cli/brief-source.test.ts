@@ -3,10 +3,11 @@ import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { briefMarkdownFor } from './brief-source.ts'
+import { briefMarkdownFor , digestFor } from './brief-source.ts'
 import { resolvePaths } from '../paths.ts'
 import { digestOf, EMPTY_CACHE, readCache, setBrief, writeCache } from '../cache/store.ts'
 import type { SessionState } from '../types.ts'
+import { tempDir } from '../temp-dir.ts'
 
 const SCRATCH = fileURLToPath(
   new URL(`../../.test-scratch/${process.pid}-briefsrc/`, import.meta.url),
@@ -160,4 +161,30 @@ test('產生成功後把分支一併存進快取', async () => {
   }), req())
   const entry = readCache(p.cacheFile).briefs[session.sessionId]
   assert.equal(entry?.gitBranch, 'feat/x')
+})
+
+test('Codex session 的語意來自 history.jsonl，不是 rollout', () => {
+  // rollout 是 Codex 自己的格式，readTranscriptDigest 讀它只會得到空的
+  // digest，於是簡報變成「沒東西可摘要」—— 而使用者明明送過十幾個 prompt。
+  const home = tempDir('helm-brief-')
+  mkdirSync(join(home, '.codex'), { recursive: true })
+  const sid = '019f40fa-de00-7f01-9f17-23f4771535c1'
+  writeFileSync(
+    join(home, '.codex', 'history.jsonl'),
+    `${JSON.stringify({ session_id: sid, ts: 1, text: '先審查整個專案架構' })}\n`
+    + `${JSON.stringify({ session_id: sid, ts: 2, text: '二次驗證' })}\n`,
+  )
+  const digest = digestFor(
+    { adapterId: 'codex', sessionId: sid, transcriptPath: '/r/x.jsonl' } as never,
+    { home } as never,
+  )
+  assert.deepEqual(digest.prompts, ['先審查整個專案架構', '二次驗證'])
+})
+
+test('Claude Code session 仍然走 transcript', () => {
+  const digest = digestFor(
+    { adapterId: 'claude-code', sessionId: 's', transcriptPath: '/nope.jsonl' } as never,
+    { home: '/h' } as never,
+  )
+  assert.deepEqual(digest.prompts, [], '讀不到就是空的，不該去碰 history.jsonl')
 })
