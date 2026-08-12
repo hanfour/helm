@@ -7,6 +7,7 @@ import type { HelmPaths } from '../paths.ts'
 import { quarantinePath } from '../projects/prefs.ts'
 import { readLiveMarker } from '../reconcile/live.ts'
 import { hasHelmHook, helmHookCommand } from './settings.ts'
+import { HOOK_MARKER } from './snippet.ts'
 import { referencedPaths } from './referenced.ts'
 import { appInstalled } from './app-present.ts'
 import {
@@ -125,6 +126,13 @@ function hookErrors(paths: HelmPaths): Check {
   // error lands there, so if it cannot be opened the hook writes nothing at
   // all — and this very check would report "no errors" while the board stays
   // permanently empty.
+  // A machine where helm has never been installed has no ~/.helm at all, and
+  // that is not a permissions problem. Reporting one sent the user to check
+  // the permissions of a directory that does not exist, while `live 目錄` was
+  // telling them to run `helm install` about the very same state.
+  if (!existsSync(paths.helmHome)) {
+    return { name: 'hook 錯誤紀錄', ok: true, detail: '沒有錯誤（helm 尚未安裝）' }
+  }
   if (!canWriteTo(paths.hookErrorsLog)) {
     return {
       name: 'hook 錯誤紀錄',
@@ -224,6 +232,30 @@ function runtimePaths(paths: HelmPaths, deps: CheckDeps): Check {
   }
 }
 
+/**
+ * install refuses to overwrite a file it did not write and says so; doctor
+ * used to check only that a file by that name existed, and reported ✓ for the
+ * same state. Two commands describing one situation in opposite terms is worse
+ * than either being wrong alone.
+ */
+function isOurs(file: string): boolean {
+  try {
+    const body = readFileSync(file, 'utf8')
+    return body.includes(`# ${HOOK_MARKER}`) || body.includes(`// ${HOOK_MARKER}`)
+  } catch {
+    return false
+  }
+}
+
+function notOurs(name: string, file: string): Check {
+  return {
+    name,
+    ok: false,
+    detail: `${file} 不是 helm 寫的，helm install 不會覆寫它，所以看板不會出現。`
+      + '想讓 helm 接手，把它改名或刪掉再跑一次 helm install。',
+  }
+}
+
 interface Artefact {
   label: string
   /** Paths that must exist for this artefact to run at all. */
@@ -292,6 +324,7 @@ function swiftbar(paths: HelmPaths, deps: SwiftBarDeps, installed: boolean): Che
       detail: `SwiftBar 掃描的是 ${scan.dir}，裡面沒有 helm 的 plugin。執行 helm install。`,
     }
   }
+  if (!isOurs(plugin)) return notOurs('SwiftBar', plugin)
   // SwiftBar only runs plugins with the executable bit set, and a plugin that
   // lost it fails silently — the menu bar simply shows nothing.
   const executable = canAccess(plugin, constants.X_OK)
@@ -327,6 +360,7 @@ function ubersicht(paths: HelmPaths, deps: UbersichtDeps, installed: boolean): C
       detail: `Übersicht 掃描的是 ${scan.dir}，裡面沒有 helm 的 widget。執行 helm install。`,
     }
   }
+  if (!isOurs(widget)) return notOurs('Übersicht', widget)
   return { name: 'Übersicht', ok: true, detail: widget }
 }
 
@@ -402,8 +436,15 @@ function canRead(path: string): boolean {
   return canAccess(path, constants.R_OK | constants.X_OK)
 }
 
+/**
+ * Creating a file inside a directory needs both write and execute on it, so
+ * `W_OK` alone reports a 0600 directory as writable and the first write then
+ * fails with EACCES.
+ */
 function canWrite(path: string): boolean {
-  return canAccess(path, constants.W_OK)
+  return existsSync(path) && statSync(path).isDirectory()
+    ? canAccess(path, constants.W_OK | constants.X_OK)
+    : canAccess(path, constants.W_OK)
 }
 
 /** A file helm may not have created yet is writable if its directory is. */

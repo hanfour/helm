@@ -307,7 +307,7 @@ test('SwiftBar plugin 沒有執行權限時檢查不通過 —— SwiftBar 不�
   const h = home()
   const dir = join(h, 'SwiftBar')
   mkdirSync(dir, { recursive: true })
-  writeFileSync(join(dir, 'helm.5s.sh'), '#!/bin/sh\n')
+  writeFileSync(join(dir, 'helm.5s.sh'), '#!/bin/sh\n# HELM_LIVE_MARKER\n')
   chmodSync(join(dir, 'helm.5s.sh'), 0o644)
   const c = find(checksOf(h, board()), 'SwiftBar')
   assert.equal(c?.ok, false)
@@ -486,4 +486,54 @@ test('錯誤紀錄印出最後 5 行 —— 少了就看不出模式', () => {
   assert.ok(c?.detail.includes('error-11'), c?.detail)
   assert.ok(c?.detail.includes('error-7'), `要有五行：${c?.detail}`)
   assert.ok(!c?.detail.includes('error-6'), `不該超過五行：${c?.detail}`)
+})
+
+test('還沒安裝時錯誤紀錄不報錯 —— 別叫使用者去檢查不存在的目錄的權限', () => {
+  // `canWriteTo` fell back to the parent directory, which does not exist
+  // before `helm install` has ever run. So a brand-new machine got 「檢查
+  // ~/.helm 的權限」while `live 目錄` said 「執行 helm install」about the
+  // very same state — two checks contradicting each other.
+  const h = home()
+  assert.equal(existsSync(join(h, '.helm')), false, '前提：還沒安裝')
+  const c = find(checksOf(h), '錯誤紀錄')
+  assert.equal(c?.ok, true, c?.detail)
+  assert.doesNotMatch(c?.detail ?? '', /權限/)
+})
+
+test('目錄少了執行權限時算不可寫 —— 建檔需要 w 加 x', () => {
+  // `canWrite` only asked for W_OK. A directory with w but not x reports
+  // writable and then fails with EACCES on the first write.
+  const h = home()
+  const live = join(h, '.helm', 'live')
+  mkdirSync(live, { recursive: true })
+  chmodSync(live, 0o600)
+  try {
+    const c = find(checksOf(h), 'live 目錄')
+    assert.equal(c?.ok, false, c?.detail)
+  } finally {
+    chmodSync(live, 0o700)
+  }
+})
+
+test('widget 被別人的檔案佔住時 doctor 也要說不通過 —— 不能跟 install 講相反的話', () => {
+  // install refuses to overwrite and warns; doctor only checked that a file
+  // called helm.jsx exists, so it reported ✓ for the same state.
+  const h = home()
+  const dir = join(h, 'Library', 'Application Support', 'Übersicht', 'widgets')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'helm.jsx'), 'export const command = "somebody else"\n')
+  const c = find(checksOf(h), 'Übersicht')
+  assert.equal(c?.ok, false, c?.detail)
+  assert.match(c?.detail ?? '', /不是 helm/)
+})
+
+test('SwiftBar plugin 被別人的檔案佔住時同理', () => {
+  const h = home()
+  const dir = join(h, 'SwiftBar')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'helm.5s.sh'), '#!/bin/sh\necho somebody else\n')
+  chmodSync(join(dir, 'helm.5s.sh'), 0o755)
+  const c = find(checksOf(h), 'SwiftBar')
+  assert.equal(c?.ok, false, c?.detail)
+  assert.match(c?.detail ?? '', /不是 helm/)
 })
