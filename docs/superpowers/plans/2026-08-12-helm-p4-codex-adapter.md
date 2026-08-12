@@ -120,11 +120,14 @@ session_meta 的 payload 有 14 種形狀（2026-04 到 2026-08 的版本演進�
 
 **Interfaces:** Produces `liveCodexCwds(deps?): Set<string>`
 
-- [ ] **Step 1：寫失敗測試**——`pgrep` 找不到任何行程（正常狀態，回空 Set 不丟例外）、`lsof` 不存在、`lsof` 回傳部分失敗、cwd 含空白、行程數為 0 時**不呼叫 lsof**（省一次 spawn）
-- [ ] **Step 2：紅**
-- [ ] **Step 3：實作**——`pgrep -x codex` 取 pid，再 `lsof -a -d cwd -Fn -p <pids>` 解 `n` 開頭的行
-- [ ] **Step 4：綠**
-- [ ] **Step 5：commit**
+- [x] **Step 1：寫失敗測試**——`pgrep` 找不到任何行程（正常狀態，回空 Set 不丟例外）、`lsof` 不存在、`lsof` 回傳部分失敗、cwd 含空白、行程數為 0 時**不呼叫 lsof**（省一次 spawn）
+- [x] **Step 2：紅**
+- [x] **Step 3：實作**——`pgrep -x codex` 取 pid，再 `lsof -a -d cwd -Fn -p <pids>` 解 `n` 開頭的行
+- [x] **Step 4：綠**
+- [x] **Step 5：實測**——沒有 codex 在跑時（最常見的狀態）光是 `pgrep` 就要 **35.7 ms**，佔 200 ms 契約的 18%
+- [x] **Step 6：commit**
+
+**Task 7 要處理的**：那 35.7 ms 是一次獨立的 spawn。Claude Code adapter 已經在跑 `ps` 了，兩邊各自 spawn 是浪費。整合時應該改成一次 `ps -eo pid,comm` 餵給兩個 adapter——claude 用它驗 PID，codex 用它找行程。省下一次 spawn，且讓「查行程」變成核心的一件事而不是每個 adapter 各做各的。
 
 ### Task 5：Codex 的 lifecycle 規則
 
