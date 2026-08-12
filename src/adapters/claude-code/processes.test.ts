@@ -116,31 +116,51 @@ test('剛結束的行程不會拖累同批仍活著的 PID', () => {
   assert.equal(got.alive.has(dead as number), false)
 })
 
-test('全部都是合法但已死的 PID 時不觸發逐一重查', () => {
-  // 99998/99999 在 ps 接受的範圍內但幾乎不可能存在，走的是「跑成功、都不存在」
-  // 那條路 —— stderr 是空的，所以直接回空 Map。
-  let calls = 0
+test('PID 少於門檻時逐一查詢 —— 那比批次快一個數量級', () => {
+  // 實測：ps -p a,b 一旦超過一個 PID 就掃整張 process table，固定 ~42ms；
+  // 單一 PID 只要 ~3.4ms。看板平時只追蹤幾個活著的 session。
+  const batches: number[][] = []
   const probe = createProbe((pids) => {
-    calls += 1
-    assert.deepEqual([...pids], [99998, 99999])
+    batches.push([...pids])
     return new Map()
   })
-  assert.equal(probe([99998, 99999]).alive.size, 0)
-  assert.equal(calls, 1, '批次成功時不該再逐一查一次')
+  probe([101, 102, 103])
+  assert.deepEqual(batches, [[101], [102], [103]])
 })
 
-test('批次失敗時退回逐一查詢，活著的 PID 仍被回報', () => {
+test('PID 多到超過門檻時改用單次批次', () => {
+  const batches: number[][] = []
+  const probe = createProbe((pids) => {
+    batches.push([...pids])
+    return new Map()
+  })
+  const many = Array.from({ length: 20 }, (_, i) => 1000 + i)
+  probe(many)
+  assert.equal(batches.length, 1)
+  assert.deepEqual(batches[0], many)
+})
+
+test('批次失敗時仍退回逐一查詢', () => {
+  const calls: number[][] = []
+  const probe = createProbe((pids) => {
+    calls.push([...pids])
+    return pids.length > 1 ? null : new Map([[pids[0] as number, 'Mon Aug 10 00:00:00 2026']])
+  })
+  const many = Array.from({ length: 20 }, (_, i) => 1000 + i)
+  assert.equal(probe(many).alive.size, 20)
+  assert.equal(calls.length, 21, '一次失敗的批次加上 20 次逐一查詢')
+})
+
+test('逐一查詢時活著的 PID 都被回報', () => {
   const probe = createProbe((pids) =>
-    pids.length > 1 ? null : new Map([[pids[0] as number, 'Mon Aug 10 00:00:00 2026']]))
+    new Map([[pids[0] as number, 'Mon Aug 10 00:00:00 2026']]))
   const got = probe([100, 200, 300])
   assert.deepEqual([...got.alive.keys()], [100, 200, 300])
 })
 
 test('逐一查詢時，個別失敗的 PID 只影響它自己', () => {
-  const probe = createProbe((pids) => {
-    if (pids.length > 1) return null
-    return pids[0] === 200 ? null : new Map([[pids[0] as number, 'Mon Aug 10 00:00:00 2026']])
-  })
+  const probe = createProbe((pids) =>
+    pids[0] === 200 ? null : new Map([[pids[0] as number, 'Mon Aug 10 00:00:00 2026']]))
   const got = probe([100, 200, 300])
   assert.deepEqual([...got.alive.keys()], [100, 300])
   assert.deepEqual([...got.unreachable], [200], '單獨失敗的那個是「不知道」')

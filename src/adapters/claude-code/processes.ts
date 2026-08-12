@@ -89,6 +89,17 @@ export type PsRunner = (pids: readonly number[]) => Map<number, string> | null
  * would leave the one behaviour that prevents a board full of false red dots
  * covered by nothing.
  */
+/**
+ * Above this many PIDs, one `ps` call is cheaper than one per PID.
+ *
+ * Measured on macOS: `ps -p a,b` scans the entire process table and costs a
+ * flat ~42 ms the moment there is more than one PID, while a single-PID query
+ * costs ~3.4 ms. The board typically tracks a handful of live sessions, so the
+ * batch that looks like the efficient choice was the expensive one — and it
+ * was 21% of `helm menu`'s whole 200 ms budget.
+ */
+const BATCH_THRESHOLD = 12
+
 export function createProbe(run: PsRunner): ProcessProbe {
   return (pids) => {
     // A PID outside what `ps` accepts is one we never asked about, so it lands
@@ -98,21 +109,30 @@ export function createProbe(run: PsRunner): ProcessProbe {
     const skipped = pids.filter((p) => !isQueryablePid(p))
     if (queryable.length === 0) return { alive: new Map(), unreachable: new Set(skipped) }
 
-    const batched = run(queryable)
-    if (batched !== null) return { alive: batched, unreachable: new Set(skipped) }
-
-    // The batch failed as a whole, so ask one at a time: whatever is wrong
-    // then costs only the PID it belongs to. Rare enough that the extra
-    // spawns are an acceptable price for not lying about every other session.
-    const alive = new Map<number, string>()
-    const unreachable = new Set<number>(skipped)
-    for (const pid of queryable) {
-      const one = run([pid])
-      if (one === null) unreachable.add(pid)
-      else if (one.has(pid)) alive.set(pid, one.get(pid) as string)
+    if (queryable.length > BATCH_THRESHOLD) {
+      const batched = run(queryable)
+      if (batched !== null) return { alive: batched, unreachable: new Set(skipped) }
+      // The batch failed as a whole. Asking one at a time means whatever is
+      // wrong costs only the PID it belongs to, instead of turning every
+      // session on the board red.
     }
-    return { alive, unreachable }
+    return oneAtATime(run, queryable, skipped)
   }
+}
+
+function oneAtATime(
+  run: PsRunner,
+  queryable: readonly number[],
+  skipped: readonly number[],
+): ProbeResult {
+  const alive = new Map<number, string>()
+  const unreachable = new Set<number>(skipped)
+  for (const pid of queryable) {
+    const one = run([pid])
+    if (one === null) unreachable.add(pid)
+    else if (one.has(pid)) alive.set(pid, one.get(pid) as string)
+  }
+  return { alive, unreachable }
 }
 
 /**

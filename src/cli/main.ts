@@ -1,12 +1,4 @@
 #!/usr/bin/env node
-import { runBrief } from './brief.ts'
-import { runDoctor } from './doctor.ts'
-import { runInstall, runUninstall } from './install.ts'
-import { runMenu } from './menu.ts'
-import { runPrefs } from './prefs.ts'
-import { runOpen } from './open.ts'
-import { runSessions } from './sessions.ts'
-import { runStatus } from './status.ts'
 
 const USAGE = `helm — 本機 agent CLI 艦隊看板
 
@@ -26,34 +18,42 @@ const USAGE = `helm — 本機 agent CLI 艦隊看板
   helm help                           顯示本說明
 
 <專案> 可以只打一部分，例如 data-svc；對不上唯一目標時會列出候選讓你選。
+名稱以 - 開頭時用 helm hide -- <名稱> 指定。
 `
 
+/**
+ * Every subcommand is imported on demand. `helm menu` runs every five seconds
+ * against a 200 ms contract, and statically importing the slow-path modules
+ * (`summarize`, `cache`, `transcript`, the installer) charged it ~65 ms of
+ * module graph it never touches — measured: `helm help`, which does nothing at
+ * all, took 99-111 ms against Node's own 34-38 ms floor.
+ */
 async function main(argv: readonly string[]): Promise<number> {
   const [command = 'status', ...rest] = argv
   switch (command) {
     case 'status':
-      return runStatus(rest)
+      return (await import('./status.ts')).runStatus(rest)
     case 'scan':
-      return runStatus([...rest, '--json'])
-    case 'sessions':
-      return runSessions(rest)
-    case 'brief':
-      return runBrief(rest)
-    case 'install':
-      return runInstall(rest)
-    case 'uninstall':
-      return runUninstall(rest)
+      return (await import('./status.ts')).runStatus([...rest, '--json'])
     case 'menu':
-      return runMenu(rest)
+      return (await import('./menu.ts')).runMenu(rest)
+    case 'sessions':
+      return (await import('./sessions.ts')).runSessions(rest)
+    case 'brief':
+      return (await import('./brief.ts')).runBrief(rest)
+    case 'open':
+      return (await import('./open.ts')).runOpen(rest)
+    case 'install':
+      return (await import('./install.ts')).runInstall(rest)
+    case 'uninstall':
+      return (await import('./install.ts')).runUninstall(rest)
     case 'doctor':
-      return runDoctor(rest)
+      return (await import('./doctor.ts')).runDoctor(rest)
     case 'pin':
     case 'unpin':
     case 'hide':
     case 'show':
-      return runPrefs(command, rest)
-    case 'open':
-      return runOpen(rest)
+      return (await import('./prefs.ts')).runPrefs(command, rest)
     case 'help':
     case '--help':
     case '-h':
