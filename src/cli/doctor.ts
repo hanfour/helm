@@ -1,5 +1,5 @@
 import { runChecks, sweepStaleLive, type CheckDeps } from '../hook/health.ts'
-import { collectStatus, currentPaths } from './status.ts'
+import { collectStatus, currentPaths, currentPrefs } from './status.ts'
 
 /**
  * `deps` exists so tests never reach the real preference database. One that
@@ -11,7 +11,7 @@ export function runDoctor(_argv: readonly string[], deps: CheckDeps = {}): numbe
   const paths = currentPaths()
   const board = collectStatus(paths, now)
 
-  const checks = runChecks(paths, board, deps)
+  const checks = runChecks(paths, board, { ...currentPrefs(), ...deps })
   for (const c of checks) process.stdout.write(`${c.ok ? '✓' : '✗'} ${c.name}：${c.detail}\n`)
 
   // Sweeping decides what to delete from a board that this very run may just

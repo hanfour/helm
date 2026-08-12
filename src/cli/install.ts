@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url'
 import {
   installHook, uninstallHook, type InstallDeps, type InstallReport,
 } from '../hook/install.ts'
-import { currentPaths } from './status.ts'
+import { currentPaths, currentPrefs } from './status.ts'
 
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url))
 
@@ -24,7 +24,7 @@ export function runUninstall(
 }
 
 function deps(overrides: Partial<InstallDeps>): InstallDeps {
-  return { now: Date.now, repoRoot: REPO_ROOT, ...overrides }
+  return { now: Date.now, repoRoot: REPO_ROOT, ...currentPrefs(), ...overrides }
 }
 
 /**

@@ -10,6 +10,9 @@ import { readPrefs } from '../projects/prefs.ts'
 import { reconcileSessions } from '../reconcile/lifecycle.ts'
 import { readLiveMarker } from '../reconcile/live.ts'
 import { renderTable } from '../render/table.ts'
+import type { PrefsIO } from '../hook/defaults.ts'
+import { defaultSwiftBarDeps } from '../hook/swiftbar.ts'
+import { defaultUbersichtDeps } from '../hook/ubersicht.ts'
 
 /** Fast path: no transcript parsing, no network, no LLM (spec 5.1). */
 export function collectStatus(
@@ -69,6 +72,23 @@ export function runStatus(argv: readonly string[]): number {
 export function currentPaths(): HelmPaths {
   const home = process.env['HELM_FAKE_HOME']
   return home === undefined ? resolvePaths() : resolvePaths({ home })
+}
+
+/**
+ * The two GUI apps' preference domains — sandboxed whenever the home
+ * directory is.
+ *
+ * A fake home looks like isolation but the `defaults` database is shared with
+ * the whole machine, so an end-to-end run against a fixture used to read the
+ * real SwiftBar folder and install into it. That is the shape of both
+ * pollution incidents this project has already had.
+ */
+export function currentPrefs(): { swiftbar: PrefsIO; ubersicht: PrefsIO } {
+  if (process.env['HELM_FAKE_HOME'] === undefined) {
+    return { swiftbar: defaultSwiftBarDeps(), ubersicht: defaultUbersichtDeps() }
+  }
+  const sandboxed: PrefsIO = { readPref: () => ({ kind: 'unset' }), writePref: () => {} }
+  return { swiftbar: sandboxed, ubersicht: sandboxed }
 }
 
 export function useColor(argv: readonly string[]): boolean {

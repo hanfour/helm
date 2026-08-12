@@ -117,6 +117,24 @@ export function removeHelmHook(settings: unknown): Settings {
     : omit(base, 'hooks')
 }
 
+/**
+ * The command helm actually has installed, so its dependencies can be checked
+ * against the machine rather than against what install intended to write.
+ */
+export function helmHookCommand(settings: unknown): string | null {
+  const hooks = asRecord(settings)['hooks']
+  if (!isRecord(hooks)) return null
+  for (const groups of Object.values(hooks)) {
+    if (!Array.isArray(groups)) continue
+    const group = groups.find(isHelmGroup)
+    if (isRecord(group) && Array.isArray(group['hooks'])) {
+      const entry = group['hooks'][0]
+      if (isRecord(entry) && typeof entry['command'] === 'string') return entry['command']
+    }
+  }
+  return null
+}
+
 export function hasHelmHook(settings: unknown): boolean {
   const hooks = asRecord(settings)['hooks']
   if (!isRecord(hooks)) return false

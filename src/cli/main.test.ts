@@ -25,7 +25,7 @@ interface Run {
 function run(script: string, home: string): Run {
   const r = spawnSync('sh', ['-c', script], {
     encoding: 'utf8',
-    env: { ...process.env, HOME: home, HELM_ENTRY: ENTRY },
+    env: { ...process.env, HOME: home, HELM_FAKE_HOME: home, HELM_ENTRY: ENTRY },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   return { out: r.stdout ?? '', err: r.stderr ?? '', code: r.status ?? -1 }
@@ -68,4 +68,19 @@ test('未知指令仍然回傳 2 並印出用法', () => {
   const r = run(`"$HELM_ENTRY" nope 2>&1 || true`, SCRATCH.root)
   assert.match(r.out, /未知指令：nope/)
   assert.match(r.out, /用法：/)
+})
+
+test('HELM_FAKE_HOME 也要隔離偏好 —— 否則端對端測試會讀寫使用者真實 app 的設定', () => {
+  // Without this, `helm doctor` under a fixture home reported the *real*
+  // ~/SwiftBar as its plugin folder, and `helm install` would have written
+  // into it. It is the shape of both pollution incidents: the fake home looks
+  // like isolation, and the preference domain is shared all the same.
+  const h = scaffoldHome([{ project: 'p', sessions: [{ id: 'bbbb2222-0000-1111-2222-333344445555' }] }])
+  const r = run(`"$HELM_ENTRY" doctor 2>&1 || true`, h)
+  const swiftbarLine = r.out.split('\n').find((l) => l.includes('SwiftBar')) ?? ''
+  assert.ok(swiftbarLine !== '', r.out)
+  assert.ok(
+    !swiftbarLine.includes('/Users/') || swiftbarLine.includes(h),
+    `不該提到假家目錄以外的路徑：${swiftbarLine}`,
+  )
 })

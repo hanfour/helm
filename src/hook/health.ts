@@ -6,7 +6,8 @@ import type { Board } from '../board.ts'
 import type { HelmPaths } from '../paths.ts'
 import { quarantinePath } from '../projects/prefs.ts'
 import { readLiveMarker } from '../reconcile/live.ts'
-import { hasHelmHook } from './settings.ts'
+import { hasHelmHook, helmHookCommand } from './settings.ts'
+import { referencedPaths } from './referenced.ts'
 import {
   defaultSwiftBarDeps, PLUGIN_NAME, resolvePluginDir, type SwiftBarDeps,
 } from './swiftbar.ts'
@@ -49,6 +50,7 @@ export function runChecks(paths: HelmPaths, board: Board, deps: CheckDeps = {}):
     dataSources(paths),
     registryParse(paths, board),
     prefsHealth(paths, board),
+    runtimePaths(paths, deps),
     swiftbar(paths, deps.swiftbar ?? defaultSwiftBarDeps(), deps.swiftbarInstalled ?? existsSync(SWIFTBAR_APP)),
     ubersicht(paths, deps.ubersicht ?? defaultUbersichtDeps(), deps.ubersichtInstalled ?? existsSync(UBERSICHT_APP)),
   ]
@@ -180,6 +182,82 @@ function prefsHealth(paths: HelmPaths, board: Board): Check {
       ? `${paths.prefsFile} 無法解析，原檔已保留為 ${quarantinePath(paths.prefsFile)}。修好後改回檔名即可。`
       : `${paths.prefsFile} 無法解析且搬不開（目錄可能不可寫）。helm 不會寫入它 —— 請自行修好或移走該檔。`,
   }
+}
+
+/**
+ * Whether the things helm installed can actually run.
+ *
+ * Every other check verifies that a file helm wrote is present. None of them
+ * verified what those files hand off to — the pinned interpreter, the entry
+ * point, the wrapper the plugin calls. So a version manager deleting an old
+ * Node image, or the user tidying ~/.local/bin, or the repo moving, killed the
+ * hook and the menu bar while `helm doctor` reported nine green checks. The
+ * `hook 錯誤紀錄` check cannot cover this either: the failure happens before
+ * record.mjs is loaded, so nothing is ever written to the log and it reports
+ * "no errors" precisely when the hook is dead.
+ */
+function runtimePaths(paths: HelmPaths, deps: CheckDeps): Check {
+  const missing = artefacts(paths, deps).flatMap(({ label, needs }) =>
+    needs.filter((p) => !existsSync(p)).map((p) => `${label} 指向的 ${p} 不存在`))
+
+  if (missing.length === 0) {
+    return {
+      name: '執行路徑',
+      ok: true,
+      detail: artefacts(paths, deps).length === 0 ? '尚未安裝，沒有需要檢查的路徑。' : '都在',
+    }
+  }
+  return {
+    name: '執行路徑',
+    ok: false,
+    detail: `${missing.join('；')}。`
+      + '這通常是 Node 升級刪掉了舊版本，或 repo 搬了位置。重跑 helm install 就會指向新的路徑。',
+  }
+}
+
+interface Artefact {
+  label: string
+  /** Paths that must exist for this artefact to run at all. */
+  needs: string[]
+}
+
+function artefacts(paths: HelmPaths, deps: CheckDeps): Artefact[] {
+  const found: Artefact[] = []
+
+  const command = helmHookCommand(readJson(paths.claudeSettings))
+  if (command !== null) {
+    // Only the first two: the interpreter and the recorder. The remaining two
+    // arguments are the live directory and the error log — output locations,
+    // each with its own check, and the log is *meant* to be absent.
+    found.push({ label: 'PreToolUse hook', needs: referencedPaths(command).slice(0, 2) })
+  }
+
+  const wrapper = wrapperPath(paths)
+  pushScript(found, 'helm wrapper', wrapper)
+
+  const plugin = resolvePluginDir(paths, deps.swiftbar ?? defaultSwiftBarDeps()).dir
+  if (plugin !== null) pushScript(found, 'SwiftBar plugin', join(plugin, PLUGIN_NAME))
+
+  const widgets = resolveWidgetDir(paths, deps.ubersicht ?? defaultUbersichtDeps()).dir
+  if (widgets !== null) pushScript(found, '桌面 widget', join(widgets, WIDGET_NAME))
+
+  return found
+}
+
+function pushScript(into: Artefact[], label: string, file: string): void {
+  let body: string
+  try {
+    body = readFileSync(file, 'utf8')
+  } catch {
+    // Not installed, or not ours to read. Whether the file itself should be
+    // there is a different check's job; this one is about what it points at.
+    return
+  }
+  into.push({ label, needs: referencedPaths(body) })
+}
+
+function wrapperPath(paths: HelmPaths): string {
+  return join(paths.home, '.local', 'bin', 'helm')
 }
 
 function swiftbar(paths: HelmPaths, deps: SwiftBarDeps, installed: boolean): Check {

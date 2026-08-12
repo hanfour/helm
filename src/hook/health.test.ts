@@ -1,14 +1,18 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { resolvePaths } from '../paths.ts'
 import { runChecks, sweepStaleLive, type Check } from './health.ts'
 import type { CheckDeps } from './health.ts'
 import type { Board } from '../board.ts'
 import type { SessionState } from '../types.ts'
 import { fakePrefs, NO_PREFS } from './test-prefs.ts'
+import { installHook } from './install.ts'
 
 const NOW = Date.UTC(2026, 7, 11, 12, 0, 0)
 const DAY = 86_400_000
@@ -51,6 +55,17 @@ const marker = (sessionId: string) =>
  * on the machine running the suite — which is to say, on a CI box they
  * asserted nothing at all.
  */
+const SCRATCH_HOME = tmpdir()
+
+const INSTALL_DEPS = {
+  now: () => 1786000000000,
+  repoRoot: fileURLToPath(new URL('../..', import.meta.url)),
+  swiftbar: NO_PREFS,
+  ubersicht: NO_PREFS,
+  swiftbarInstalled: true,
+  ubersichtInstalled: true,
+}
+
 const checksOf = (home: string, b = board(), extra: CheckDeps = {}) =>
   runChecks(resolvePaths({ home }), b, {
     swiftbar: NO_PREFS,
@@ -334,4 +349,82 @@ test('已經不存在的檔案不計入「順手清掉 N 個」', () => {
   const old = (NOW - 31 * DAY) / 1000
   utimesSync(join(live, 'a-directory.json'), old, old)
   assert.deepEqual(sweepStaleLive(resolvePaths({ home: h }), board(), NOW), [])
+})
+
+/** Installs for real, then breaks one thing, so the checks face a real layout. */
+function installed(extra: Parameters<typeof installHook>[1] = INSTALL_DEPS): string {
+  const h = home()
+  installHook(resolvePaths({ home: h }), extra)
+  return h
+}
+
+test('hook 釘住的 node 不見時檢查不通過 —— 那是版本管理器升級後的常態', () => {
+  // Three reviewers found this independently: nvm/brew delete the old image,
+  // every artefact keeps pointing at it, the hook and the menu bar die
+  // silently, and doctor reports nine green checks. `hook 錯誤紀錄` cannot
+  // save it either — the failure happens before record.mjs is ever loaded, so
+  // no log line is written and the check says "no errors".
+  const h = installed({ ...INSTALL_DEPS, nodeBin: join(SCRATCH_HOME, 'gone', 'node') })
+  const c = find(checksOf(h), '執行路徑')
+  assert.equal(c?.ok, false, c?.detail)
+  assert.match(c?.detail ?? '', /node/)
+  assert.match(c?.detail ?? '', /hook|PreToolUse/)
+})
+
+test('wrapper 被刪掉時檢查不通過 —— SwiftBar plugin 靠它才跑得起來', () => {
+  // Tidying ~/.local/bin is ordinary. The plugin then exits 126 on every
+  // refresh while the SwiftBar check stays green, because it only ever
+  // verified that the plugin file itself exists and is executable.
+  const h = installed()
+  rmSync(join(h, '.local', 'bin', 'helm'), { force: true })
+  const c = find(checksOf(h), '執行路徑')
+  assert.equal(c?.ok, false, c?.detail)
+  assert.match(c?.detail ?? '', /helm/)
+})
+
+test('進入點不見時檢查不通過 —— repo 搬家就是這樣', () => {
+  const h = installed({ ...INSTALL_DEPS, repoRoot: join(SCRATCH_HOME, 'moved-away') })
+  const c = find(checksOf(h), '執行路徑')
+  assert.equal(c?.ok, false, c?.detail)
+  assert.match(c?.detail ?? '', /main\.ts/)
+})
+
+test('全部就位時執行路徑這一項通過', () => {
+  const c = find(checksOf(installed()), '執行路徑')
+  assert.equal(c?.ok, true, c?.detail)
+})
+
+test('還沒安裝時執行路徑不報錯 —— 沒東西可檢查不等於壞掉', () => {
+  const c = find(checksOf(home()), '執行路徑')
+  assert.equal(c?.ok, true, c?.detail)
+  assert.match(c?.detail ?? '', /尚未安裝|沒有/)
+})
+
+test('錯誤紀錄還不存在時這一項要通過 —— 那正是一切正常的樣子', () => {
+  // The check fell back to the parent directory when the log was absent, so a
+  // brand-new machine (no ~/.helm yet) was told to go and check the
+  // permissions of a directory that does not exist — while `live 目錄` said
+  // "run helm install" about the very same state.
+  const h = installed()
+  assert.equal(existsSync(join(h, '.helm', 'hook-errors.log')), false, '前提：還沒有錯誤')
+  const c = find(checksOf(h), '錯誤紀錄')
+  assert.equal(c?.ok, true, c?.detail)
+})
+
+test('HELM_OFF=1 時如實說 hook 停用中 —— 靜默停用是個陷阱', () => {
+  const before = process.env['HELM_OFF']
+  process.env['HELM_OFF'] = '1'
+  try {
+    const c = find(checksOf(home()), '啟用')
+    assert.equal(c?.ok, false, c?.detail)
+    assert.match(c?.detail ?? '', /HELM_OFF/)
+  } finally {
+    if (before === undefined) delete process.env['HELM_OFF']
+    else process.env['HELM_OFF'] = before
+  }
+})
+
+test('資料來源還沒建立時算正常 —— Claude Code 第一次跑之前本來就沒有', () => {
+  const c = find(checksOf(home()), '資料來源')
+  assert.equal(c?.ok, true, c?.detail)
 })
