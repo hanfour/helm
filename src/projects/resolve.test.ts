@@ -15,13 +15,13 @@ const sess = (over: Partial<SessionState>): SessionState => ({
 const idOf = (name: string) => `${name.replace(/[^a-z0-9]/g, '')}-1111-2222-3333-444444444444`
 
 const proj = (name: string, over: Partial<ProjectView> = {}): ProjectView => ({
-  path: `/Users/u/Acme/${name}`,
+  path: `/Users/u/TokenCorp/${name}`,
   name,
   pinned: false,
   lastActivityMs: 0,
   aggregateStatus: null,
   sessionCount: 1,
-  sessions: [sess({ cwd: `/Users/u/Acme/${name}`, sessionId: idOf(name) })],
+  sessions: [sess({ cwd: `/Users/u/TokenCorp/${name}`, sessionId: idOf(name) })],
   ...over,
 })
 
@@ -42,7 +42,7 @@ test('部分相符也能命中', () => {
 })
 
 test('大小寫不敏感', () => {
-  const r = resolveTarget([REPORT], 'REPORT-STUDIO')
+  const r = resolveTarget([REPORT], 'REPORT-TOOL')
   assert.equal(r.kind, 'project')
 })
 
@@ -73,7 +73,7 @@ test('同名不同路徑的專案，候選改列完整路徑才分得出來', ()
 })
 
 test('專案名找不到時退而比對 session id 前綴', () => {
-  const r = resolveTarget(ALL, 'reportstudio')
+  const r = resolveTarget(ALL, 'reporttool')
   assert.equal(r.kind, 'session')
   assert.equal(r.kind === 'session' ? r.session.sessionId : '', idOf('report-tool'))
 })
@@ -117,10 +117,17 @@ test('路徑的一部分也能用來消除歧義', () => {
   assert.equal(r.kind === 'project' ? r.project.path : '', '/Users/u/b/api')
 })
 
-test('路徑比對不會讓原本單純的專案名查詢變成歧義', () => {
-  // /Users/u/acme/report-tool 的路徑含 'one'，不該讓查 'one' 時多冒出來。
-  const r = resolveTarget([proj('report-tool'), proj('token-service')], 'token-service')
-  assert.equal(r.kind, 'project')
+test('名稱部分相符優先於路徑部分相符，不會被路徑拖成歧義', () => {
+  // 這條原本用的查詢是完全相符的專案名，第 0 層就命中，根本走不到
+  // 路徑比對那一層 —— 註解說的事情一次都沒有被驗證過。實測：把
+  // 「名稱含 q」那一層拿掉，測試照樣全綠。
+  //
+  // 要真的觸發，查詢必須只在 A 的名稱裡、且同時在 B 的路徑裡。
+  const named = proj('report-tool')
+  const onlyInPath = proj('billing', { path: '/Users/u/report-corp/billing' })
+  const r = resolveTarget([named, onlyInPath], 'report')
+  assert.equal(r.kind, 'project', JSON.stringify(r))
+  assert.equal(r.kind === 'project' ? r.project.name : '', 'report-tool')
 })
 
 test('都對不上時回傳 notfound', () => {

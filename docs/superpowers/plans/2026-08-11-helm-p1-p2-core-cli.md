@@ -401,7 +401,7 @@ const VALID = JSON.stringify({
   version: '2.1.223',
   kind: 'interactive',
   entrypoint: 'cli',
-  name: 'data-svc-2-0-26',
+  name: 'example-service-26',
   status: 'busy',
   updatedAt: 1786416587966,
   statusUpdatedAt: 1786416587966,
@@ -1699,7 +1699,7 @@ test('同一 cwd 的多個 session 歸為一個專案', () => {
 
 test('專案名取 cwd 的最後一段', () => {
   const out = groupIntoProjects([sess({ cwd: '/Users/testuser/acme/example-service' })], deps)
-  assert.equal(out[0]?.name, 'data-svc-2.0')
+  assert.equal(out[0]?.name, 'example-service')
 })
 
 test('lastActivityMs 取該專案所有 session 的最大值', () => {
@@ -4939,7 +4939,7 @@ Expected: **只有**被改的那個專案顯示「已中斷」，其餘維持原
 ps: process id too large: 999999      （無錯誤訊息）
 ● helm               1 個中斷未回收   ● helm               1 個在跑
 ● project-echo          1 個中斷未回收   ● project-echo          1 個在跑
-● data-svc-2.0-clone 1 個中斷未回收  ● data-svc-2.0-clone 1 個中斷未回收  ← 唯一被竄改的
+● example-service-clone 1 個中斷未回收  ● example-service-clone 1 個中斷未回收  ← 唯一被竄改的
 ```
 
 ✅ 誤報消除、✅ stderr 不再汙染輸出、✅ 20 個測試全過（原 7 + 新 13），
@@ -4983,7 +4983,7 @@ git commit -m "fix: 一個壞 PID 不再讓整批存活性判定誤報為當機"
 
 平均一個專案 9.3 個 session，`report-tool` 近期 25 個、總共 83 個。以 session 為單位的看板，98% 是歷史雜訊。
 
-**「接續」本來就是專案層級的動作**：使用者想的是「回去繼續 data-svc 那件事」，不是「resume `f9810d2c`」。session id 是實作細節，不該是使用者介面。
+**「接續」本來就是專案層級的動作**：使用者想的是「回去繼續 example-service 那件事」，不是「resume `f9810d2c`」。session id 是實作細節，不該是使用者介面。
 
 ### 設計
 
@@ -5005,10 +5005,10 @@ git commit -m "fix: 一個壞 PID 不再讓整批存活性判定誤報為當機"
 **主視圖**：一個專案一行。
 
 ```
-● data-svc-2.0       2 分鐘前   1 個在跑              13 個 session
+● example-service       2 分鐘前   1 個在跑              13 個 session
 ○ report-tool       1 小時前   1 個等輸入            25 個 session
 ● project-alpha    1 小時前   1 個中斷未回收        21 個 session
-  TokenSvc            5 小時前                         19 個 session
+  token-service            5 小時前                         19 個 session
 ```
 
 專案的狀態圓點是其下所有 session 的聚合，優先序：**有 crashed → 紅；有 busy → 綠實心；有 idle → 綠空心；全部結束 → 無圓點（不是灰點，減少視覺噪音）**。
@@ -5019,7 +5019,7 @@ git commit -m "fix: 一個壞 PID 不再讓整批存活性判定誤報為當機"
 
 ### 名稱解析
 
-專案以 `basename` 比對，大小寫不敏感，支援部分比對（`data-svc` 要能找到 `data-svc-2.0`）。歧義時**不要猜** —— 例如 `data-svc` 同時符合 `data-svc-2.0` 與 `data-svc-2.0-clone`，此時列出候選讓使用者選，並提示可用更長的字串。
+專案以 `basename` 比對，大小寫不敏感，支援部分比對（`example-service` 要能找到 `example-service`）。歧義時**不要猜** —— 例如 `example-service` 同時符合 `example-service` 與 `example-service-clone`，此時列出候選讓使用者選，並提示可用更長的字串。
 
 session id 前綴的比對維持現狀。判斷順序：先試專案名，無結果再試 session id 前綴。
 
@@ -5037,7 +5037,7 @@ session id 前綴的比對維持現狀。判斷順序：先試專案名，無結
 
 2. **反解必然是有損的**，一個 `-` 可能來自 `/`、`.`、`-`、空白或任何一個中文字，所以唯一可靠的做法是**走真實檔案系統回推**：逐層 readdir，比對哪些子目錄的 slug 形式能吃掉這段前綴，長的優先、走死路要回溯。實測 28 個 slug 全部反解耗時 5.3 ms，並加了步數上限防止病態目錄結構指數展開。
 
-3. **cwd 必須正規化。** macOS 檔案系統大小寫不敏感但保留大小寫：註冊表記的是使用者打的 `~/Acme/TokenSvc`，磁碟上是 `token-service`。不正規化的話同一個專案會裂成兩行 —— 正是這個 Task 要消滅的東西。用 `realpathSync.native`，失敗就原樣退回（該路徑已不存在，下游 `cwdExists` 本來就會濾掉）。
+3. **cwd 必須正規化。** macOS 檔案系統大小寫不敏感但保留大小寫：註冊表記的是使用者打的 `~/acme/token-service`，磁碟上是 `token-service`。不正規化的話同一個專案會裂成兩行 —— 正是這個 Task 要消滅的東西。用 `realpathSync.native`，失敗就原樣退回（該路徑已不存在，下游 `cwdExists` 本來就會濾掉）。
 
 反解不出來的 slug 直接略過，不計入 `invalid` 警告：反解失敗等於該目錄已不存在，`shouldInclude` 的 `cwdExists` 規則本來就會濾掉它，不是靜默資料遺失。
 
@@ -5085,7 +5085,7 @@ session id 前綴的比對維持現狀。判斷順序：先試專案名，無結
 1. `helm status` 列出 12 個左右的專案，**一個專案一行**，含 `project-alpha`（它不在註冊表裡）
 2. `helm sessions project-alpha` 展開得到該專案的 session 列表
 3. `helm brief project-alpha` 找得到並產生簡報
-4. `helm open data-svc` 在歧義時列出 `data-svc-2.0` 與 `data-svc-2.0-clone` 讓使用者選，**不自動挑**
+4. `helm open example-service` 在歧義時列出 `example-service` 與 `example-service-clone` 讓使用者選，**不自動挑**
 5. 仍在註冊表裡的 session 保留正確的 busy/idle 與紅點判定，不因改用 transcript 探索而退化
 6. `time helm status` 仍在 200ms 內，數字貼進報告
 7. 雜訊路徑（`/private/tmp`、`Downloads`、`var/folders`）仍被排除
@@ -5096,8 +5096,8 @@ session id 前綴的比對維持現狀。判斷順序：先試專案名，無結
 2. ✅ `helm sessions project-alpha` 展開 21 個 session，含計畫點名的 `19519d4f`
 3. ⚠️ 部分達成 —— 解析、transcript 讀取、git 快照、prompt 組裝、渲染全通（用假 runner 跑完整條路徑，
    prompt 22,234 字元），**真正的 LLM 呼叫未執行**，那是一次要花錢的付費呼叫，留給使用者決定
-4. ✅ 以同一個 resolver 驗證（`helm sessions data-svc`）：列出 `data-svc-2.0` 與
-   `data-svc-2.0-clone` 並提示「打長一點」，不自動挑。`helm open` 本身屬 Task 10
+4. ✅ 以同一個 resolver 驗證（`helm sessions example-service`）：列出 `example-service` 與
+   `example-service-clone` 並提示「打長一點」，不自動挑。`helm open` 本身屬 Task 10
 5. ✅ 以 fixture 驗證：註冊表殘留（PID 已死）仍判紅點並顯示「1 個中斷未回收」，
    同專案底下 transcript-only 的 session 顯示「已結束」，兩者並存
 6. ✅ `collectStatus` 5 次量測 78.0 / 78.2 / 78.4 / 81.5 / 89.4 ms（契約 200ms）。

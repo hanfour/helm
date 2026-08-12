@@ -16,8 +16,8 @@
 | 痛點 | 實地證據 |
 |---|---|
 | 不知道哪個專案做到哪 | 當下有 8 個 Claude Code session 同時存活，橫跨 5 個不同 `cwd` |
-| 找不到正確的 session 可 resume | `data-svc-2.0` 專案目錄下有 59 個 session 檔；`--resume` 清單依賴的 `ai-title` **完全失效** —— 該 session 的 487 筆 `ai-title` 記錄全是同一句「Clone codebase」，那是 session 開頭定死的標題，之後從未更新 |
-| 進行中的任務狀態消失 | 使用者的 session 是長壽型：`data-svc-2.0` 的 session 從 8/6 開到 8/11，transcript 累積 7679 行。當機損失極大 |
+| 找不到正確的 session 可 resume | `example-service` 專案目錄下有 59 個 session 檔；`--resume` 清單依賴的 `ai-title` **完全失效** —— 該 session 的 487 筆 `ai-title` 記錄全是同一句「Clone codebase」，那是 session 開頭定死的標題，之後從未更新 |
+| 進行中的任務狀態消失 | 使用者的 session 是長壽型：`example-service` 的 session 從 8/6 開到 8/11，transcript 累積 7679 行。當機損失極大 |
 | 沒有跨專案優先順序視野 | 8 個 session 分散在 8 個終端機分頁，無彙總視圖 |
 | 遠端 PR 審查狀態不明 | 無法得知哪張 PR 在等自己修改 |
 
@@ -119,7 +119,7 @@
   "version": "2.1.223",
   "kind": "interactive",
   "entrypoint": "cli",
-  "name": "data-svc-2-0-26",
+  "name": "example-service-26",
   "nameSource": "derived",
   "status": "busy",
   "updatedAt": 1786416587966,

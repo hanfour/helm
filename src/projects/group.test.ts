@@ -30,7 +30,7 @@ test('同一 cwd 的多個 session 歸為一個專案', () => {
 })
 
 test('專案名取 cwd 的最後一段', () => {
-  const out = groupIntoProjects([sess({ cwd: '/Users/testuser/acme/example-service' })], deps)
+  const out = groupIntoProjects([sess({ cwd: '/Users/testuser/Acme/data-svc-2.0' })], deps)
   assert.equal(out[0]?.name, 'data-svc-2.0')
 })
 

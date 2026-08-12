@@ -1674,11 +1674,11 @@ git commit -m "feat: helm pin/unpin/hide/show 設定專案偏好"
 ```
 ⚓ 1 中斷 | color=red
 ---
-data-svc-2.0  2 分鐘前 | color=red
+example-service  2 分鐘前 | color=red
 --● 已中斷  abc12345  5 分鐘前
 ----開終端機接續 | bash="/Users/u/.local/bin/helm" param1=open param2=abc12345 terminal=false refresh=true
 ----看交接簡報 | bash="/Users/u/.local/bin/helm" param1=brief param2=abc12345 terminal=true
---隱藏此專案 | bash="/Users/u/.local/bin/helm" param1=hide param2=data-svc-2.0 terminal=false refresh=true
+--隱藏此專案 | bash="/Users/u/.local/bin/helm" param1=hide param2=example-service terminal=false refresh=true
 ---
 重新整理 | refresh=true
 helm doctor | bash="/Users/u/.local/bin/helm" param1=doctor terminal=true

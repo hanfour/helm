@@ -17,7 +17,7 @@ function makeDir(files: Record<string, string>): string {
 const VALID = JSON.stringify({
   pid: 60907,
   sessionId: 'f9810d2c-4c2c-474b-9dc9-05f0707a526f',
-  cwd: '/Users/testuser/acme/example-service',
+  cwd: '/Users/testuser/Acme/data-svc-2.0',
   startedAt: 1785996974955,
   procStart: 'Thu Aug  6 06:16:12 2026',
   version: '2.1.223',
