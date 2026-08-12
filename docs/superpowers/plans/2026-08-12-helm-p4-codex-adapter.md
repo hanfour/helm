@@ -80,11 +80,11 @@ session_meta 的 payload 有 14 種形狀（2026-04 到 2026-08 的版本演進�
 
 **注意：** 回傳的是 `rolloutId`（這個檔案自己的 id），**不是 session id**。session id 只存在第一行的 payload 裡，見上面的修正。
 
-- [ ] **Step 1：寫失敗測試**——正常檔名、非 rollout 檔名、時間戳格式壞掉、uuid 少一段、目錄分隔符混進來。時間是本地時間還是 UTC 要對照 `session_meta.timestamp` 確認（實測那一筆檔名 `T14-25-24` 對應 payload 的 `06:25:24.937Z`，差 8 小時 → **檔名是本地時間**，這件事必須有測試釘住，否則排序會錯 8 小時）
-- [ ] **Step 2：跑測試確認紅**
-- [ ] **Step 3：實作**——`rollout-<YYYY>-<MM>-<DD>T<HH>-<mm>-<ss>-<uuid>.jsonl`，uuid 是最後 36 字元
-- [ ] **Step 4：綠**
-- [ ] **Step 5：commit**
+- [x] **Step 1：寫失敗測試**——正常檔名、非 rollout 檔名、時間戳格式壞掉、uuid 少一段、目錄分隔符混進來。時間是本地時間還是 UTC 要對照 `session_meta.timestamp` 確認（實測那一筆檔名 `T14-25-24` 對應 payload 的 `06:25:24.937Z`，差 8 小時 → **檔名是本地時間**，這件事必須有測試釘住，否則排序會錯 8 小時）
+- [x] **Step 2：跑測試確認紅**
+- [x] **Step 3：實作**——`rollout-<YYYY>-<MM>-<DD>T<HH>-<mm>-<ss>-<uuid>.jsonl`，uuid 是最後 36 字元
+- [x] **Step 4：綠**
+- [x] **Step 5：commit**
 
 ### Task 2：掃描 rollout 目錄
 
@@ -92,12 +92,12 @@ session_meta 的 payload 有 14 種形狀（2026-04 到 2026-08 的版本演進�
 
 **Interfaces:** Consumes Task 1。Produces `scanRollouts(sessionsDir, sinceMs): RolloutFile[]`，欄位 `{ rolloutId, path, startedAt, mtimeMs }`
 
-- [ ] **Step 1：寫失敗測試**——`YYYY/MM/DD` 三層結構、窗口過濾用 mtime 不是檔名時間（session 可能開很久）、目錄不存在回空陣列不丟例外、非 rollout 檔案略過、檔名解析失敗的檔案略過而不是讓整批失敗
-- [ ] **Step 2：紅**
-- [ ] **Step 3：實作**——`readdirSync(withFileTypes)` 遞迴三層，只 `statSync`，絕不讀內容
-- [ ] **Step 4：綠**
-- [ ] **Step 5：量測**——對真實的 `~/.codex` 跑一次，記錄耗時進計畫
-- [ ] **Step 6：commit**
+- [x] **Step 1：寫失敗測試**——`YYYY/MM/DD` 三層結構、窗口過濾用 mtime 不是檔名時間（session 可能開很久）、目錄不存在回空陣列不丟例外、非 rollout 檔案略過、檔名解析失敗的檔案略過而不是讓整批失敗
+- [x] **Step 2：紅**
+- [x] **Step 3：實作**——`readdirSync(withFileTypes)` 遞迴三層，只 `statSync`，絕不讀內容
+- [x] **Step 4：綠**
+- [x] **Step 5：量測**——對真實的 `~/.codex` 跑：**1.6–2.6 ms**（掃過 192 個檔、窗口內 34 個）。只 stat 不讀內容的代價，對照讀第一行的 25.7 ms
+- [x] **Step 6：commit**
 
 ### Task 3：cwd 的讀取與快取
 
