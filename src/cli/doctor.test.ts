@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { runDoctor } from './doctor.ts'
 import { runInstall } from './install.ts'
 import { captureSync, scaffoldHome, SCRATCH } from './test-helpers.ts'
+import { NO_PREFS } from '../hook/test-prefs.ts'
 
 after(SCRATCH.cleanup)
 
@@ -15,7 +16,6 @@ after(SCRATCH.cleanup)
  * Both apps are reported present so the checks exercise their real branches
  * rather than whatever happens to be in /Applications on this machine.
  */
-const NO_PREFS = { readPref: () => null, writePref: () => {} }
 const FAKE = { swiftbar: NO_PREFS, ubersicht: NO_PREFS }
 const CHECK_DEPS = { ...FAKE, swiftbarInstalled: true, ubersichtInstalled: true }
 

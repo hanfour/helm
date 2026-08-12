@@ -1,8 +1,10 @@
 import { join } from 'node:path'
 import type { HelmPaths } from '../paths.ts'
 import { prefsFor, type PrefsIO } from './defaults.ts'
+import { resolveScannedDir, type ScannedDir } from './scan-dir.ts'
 
 const BUNDLE_ID = 'tracesOf.Uebersicht'
+const APP_NAME = 'Übersicht'
 
 /** Übersicht's own preference key for the folder it scans. Verified 2026-08-12. */
 const WIDGET_DIR_KEY = 'widgetDir'
@@ -26,21 +28,14 @@ export function defaultWidgetDir(paths: HelmPaths): string {
   return join(paths.home, 'Library', 'Application Support', 'Übersicht', 'widgets')
 }
 
-/**
- * The folder Übersicht actually scans: its own setting if it has one, else
- * the default. Installing anywhere else is the silent dead end — file in
- * place, checks green, desktop empty.
- */
-export function scannedWidgetDir(paths: HelmPaths, deps: UbersichtDeps): string {
-  return deps.readPref(WIDGET_DIR_KEY) ?? defaultWidgetDir(paths)
+/** The folder Übersicht actually scans, or null when helm must not write. */
+export function resolveWidgetDir(paths: HelmPaths, deps: UbersichtDeps): ScannedDir {
+  return resolveScannedDir(
+    deps.readPref(WIDGET_DIR_KEY), defaultWidgetDir(paths), APP_NAME, WIDGET_DIR_KEY,
+  )
 }
 
-/**
- * Points Übersicht at a folder, but only when it has not already chosen one.
- * An existing value is the user's decision. Returns whether it was written.
- */
-export function adoptWidgetDir(dir: string, deps: UbersichtDeps): boolean {
-  if (deps.readPref(WIDGET_DIR_KEY) !== null) return false
+/** Only ever called with a resolution that said `adoptable`. */
+export function adoptWidgetDir(dir: string, deps: UbersichtDeps): void {
   deps.writePref(WIDGET_DIR_KEY, dir)
-  return true
 }

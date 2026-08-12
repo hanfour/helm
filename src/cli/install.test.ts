@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { runInstall, runUninstall } from './install.ts'
 import { captureSync, scaffoldHome, SCRATCH } from './test-helpers.ts'
+import { NO_PREFS } from '../hook/test-prefs.ts'
 
 after(SCRATCH.cleanup)
 
@@ -12,7 +13,6 @@ after(SCRATCH.cleanup)
  * settings of an app the user actually runs — which is how one of these tests
  * pointed Übersicht at a temp directory it then deleted.
  */
-const NO_PREFS = { readPref: () => null, writePref: () => {} }
 const FAKE = { swiftbar: NO_PREFS, ubersicht: NO_PREFS }
 
 const settingsOf = (home: string): unknown =>

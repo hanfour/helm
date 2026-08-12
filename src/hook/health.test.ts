@@ -8,6 +8,7 @@ import { runChecks, sweepStaleLive, type Check } from './health.ts'
 import type { CheckDeps } from './health.ts'
 import type { Board } from '../board.ts'
 import type { SessionState } from '../types.ts'
+import { fakePrefs, NO_PREFS } from './test-prefs.ts'
 
 const NOW = Date.UTC(2026, 7, 11, 12, 0, 0)
 const DAY = 86_400_000
@@ -43,7 +44,6 @@ function home(): string {
 const marker = (sessionId: string) =>
   JSON.stringify({ sessionId, ts: 0, toolName: 'Bash', summary: 'x' })
 
-const noPref = { readPref: () => null, writePref: () => {} }
 
 /**
  * Both apps are reported as installed by default, and never probed for real.
@@ -53,8 +53,8 @@ const noPref = { readPref: () => null, writePref: () => {} }
  */
 const checksOf = (home: string, b = board(), extra: CheckDeps = {}) =>
   runChecks(resolvePaths({ home }), b, {
-    swiftbar: noPref,
-    ubersicht: noPref,
+    swiftbar: NO_PREFS,
+    ubersicht: NO_PREFS,
     swiftbarInstalled: true,
     ubersichtInstalled: true,
     ...extra,
@@ -309,7 +309,7 @@ test('widget 不在 Übersicht 掃描的資料夾裡時檢查不通過，並說�
   const h = home()
   const elsewhere = join(h, 'somewhere-else')
   const c = find(
-    checksOf(h, board(), { ubersicht: { readPref: () => elsewhere, writePref: () => {} } }),
+    checksOf(h, board(), { ubersicht: fakePrefs({ widgetDir: elsewhere }) }),
     'Übersicht',
   )
   assert.equal(c?.ok, false)

@@ -7,11 +7,13 @@ import type { HelmPaths } from '../paths.ts'
 import { addHelmHook, hasHelmHook, removeHelmHook } from './settings.ts'
 import { buildHookCommand, HOOK_MARKER, shellQuote } from './snippet.ts'
 import {
-  adoptPluginDir, defaultSwiftBarDeps, PLUGIN_NAME, scannedPluginDir, type SwiftBarDeps,
+  adoptPluginDir, defaultPluginDir, defaultSwiftBarDeps, PLUGIN_NAME, resolvePluginDir,
+  type SwiftBarDeps,
 } from './swiftbar.ts'
 import {
-  adoptWidgetDir, defaultUbersichtDeps, scannedWidgetDir, type UbersichtDeps,
+  adoptWidgetDir, defaultUbersichtDeps, defaultWidgetDir, resolveWidgetDir, type UbersichtDeps,
 } from './ubersicht.ts'
+import type { ScannedDir } from './scan-dir.ts'
 import { buildWidget, WIDGET_MARKER, WIDGET_NAME } from './widget.ts'
 
 const SWIFTBAR_APP = '/Applications/SwiftBar.app'
@@ -134,33 +136,7 @@ function apply(
   if (wrapperOk) steps.push(`已安裝 ${wrapper}`)
   else warnings.push(`${wrapper} 已經存在且不是 helm 寫的（Kubernetes 的 helm 也叫這個名字），未覆寫。想用 helm 指令請自行改名或換一個位置。`)
 
-  if (deps.swiftbarInstalled ?? existsSync(SWIFTBAR_APP)) {
-    const swiftbar = deps.swiftbar ?? defaultSwiftBarDeps()
-    // Install into the folder SwiftBar actually scans. Putting the plugin
-    // anywhere else is the silent dead end this whole path guards against:
-    // every file in place, every check green, and an empty menu bar.
-    const dir = scannedPluginDir(paths, swiftbar)
-    const plugin = join(dir, PLUGIN_NAME)
-    // Absolute path: SwiftBar runs plugins with a minimal PATH that will not
-    // contain ~/.local/bin. Falls back to the entry point directly when the
-    // wrapper is somebody else's file.
-    const body = wrapperOk
-      ? `#!/bin/sh\nexec ${shellQuote(wrapper)} menu\n`
-      : `#!/bin/sh\n${nodeInvocation(nodeBin)}\nexec "$NODE" ${entry} menu\n`
-    if (writeOurScript(plugin, body)) {
-      steps.push(`已安裝 SwiftBar plugin：${plugin}`)
-    } else {
-      warnings.push(`${plugin} 已經存在且不是 helm 寫的，未覆寫。`)
-    }
-    // Writing this before SwiftBar's first launch skips its folder picker —
-    // a manual, GUI-only step helm cannot perform, and one that hides the
-    // failure completely when it is left undone.
-    if (adoptPluginDir(dir, swiftbar)) {
-      steps.push(`已把 SwiftBar 的 plugin 資料夾設為 ${dir}`)
-    }
-  } else {
-    warnings.push('找不到 SwiftBar，選單列看板尚未啟用。安裝方式：brew install --cask swiftbar，裝好後重跑 helm install。')
-  }
+  installPlugin(paths, deps, { wrapper, wrapperOk, entryRaw, nodeBin }, steps, warnings)
 
   installWidget(paths, deps, { wrapper, wrapperOk, entryRaw, nodeBin }, steps, warnings)
 
@@ -183,6 +159,50 @@ interface Invocation {
  * among twenty others. Übersicht draws a shell command's output straight onto
  * the wallpaper, which is exactly the shape helm already produces.
  */
+function installPlugin(
+  paths: HelmPaths,
+  deps: InstallDeps,
+  invocation: Invocation,
+  steps: string[],
+  warnings: string[],
+): void {
+  if (!(deps.swiftbarInstalled ?? existsSync(SWIFTBAR_APP))) {
+    warnings.push('找不到 SwiftBar，選單列看板尚未啟用。安裝方式：brew install --cask swiftbar，裝好後重跑 helm install。')
+    return
+  }
+  const swiftbar = deps.swiftbar ?? defaultSwiftBarDeps()
+  // Install into the folder SwiftBar actually scans. Putting the plugin
+  // anywhere else is the silent dead end this whole path guards against:
+  // every file in place, every check green, and an empty menu bar.
+  const scan = resolvePluginDir(paths, swiftbar)
+  if (!usable(scan, warnings)) return
+  const plugin = join(scan.dir, PLUGIN_NAME)
+  // Absolute path: SwiftBar runs plugins with a minimal PATH that will not
+  // contain ~/.local/bin. Falls back to the entry point directly when the
+  // wrapper is somebody else's file.
+  const body = invocation.wrapperOk
+    ? `#!/bin/sh\nexec ${shellQuote(invocation.wrapper)} menu\n`
+    : `#!/bin/sh\n${nodeInvocation(invocation.nodeBin)}\nexec "$NODE" ${shellQuote(invocation.entryRaw)} menu\n`
+  if (writeOurScript(plugin, body)) {
+    steps.push(`已安裝 SwiftBar plugin：${plugin}`)
+  } else {
+    warnings.push(`${plugin} 已經存在且不是 helm 寫的，未覆寫。`)
+  }
+  // Writing this before SwiftBar's first launch skips its folder picker —
+  // a manual, GUI-only step helm cannot perform, and one that hides the
+  // failure completely when it is left undone.
+  if (scan.adoptable) {
+    adoptPluginDir(scan.dir, swiftbar)
+    steps.push(`已把 SwiftBar 的 plugin 資料夾設為 ${scan.dir}`)
+  }
+}
+
+/** Narrows to a writable folder, pushing the resolution's warning if not. */
+function usable(scan: ScannedDir, warnings: string[]): scan is ScannedDir & { dir: string } {
+  if (scan.warning !== null) warnings.push(scan.warning)
+  return scan.dir !== null
+}
+
 function installWidget(
   paths: HelmPaths,
   deps: InstallDeps,
@@ -195,8 +215,9 @@ function installWidget(
     return
   }
   const ubersicht = deps.ubersicht ?? defaultUbersichtDeps()
-  const dir = scannedWidgetDir(paths, ubersicht)
-  const widget = join(dir, WIDGET_NAME)
+  const scan = resolveWidgetDir(paths, ubersicht)
+  if (!usable(scan, warnings)) return
+  const widget = join(scan.dir, WIDGET_NAME)
   // Same fallback as the SwiftBar plugin: when ~/.local/bin/helm belongs to
   // somebody else, call the entry point directly rather than draw nothing.
   const argv = invocation.wrapperOk
@@ -209,8 +230,9 @@ function installWidget(
   } else {
     warnings.push(`${widget} 已經存在且不是 helm 寫的，未覆寫。`)
   }
-  if (adoptWidgetDir(dir, ubersicht)) {
-    steps.push(`已把 Übersicht 的 widget 資料夾設為 ${dir}`)
+  if (scan.adoptable) {
+    adoptWidgetDir(scan.dir, ubersicht)
+    steps.push(`已把 Übersicht 的 widget 資料夾設為 ${scan.dir}`)
   }
 }
 
@@ -235,13 +257,18 @@ export function uninstallHook(paths: HelmPaths, deps: InstallDeps): InstallRepor
 
   const swiftbar = deps.swiftbar ?? defaultSwiftBarDeps()
   const ubersicht = deps.ubersicht ?? defaultUbersichtDeps()
+  const pluginDir = resolvePluginDir(paths, swiftbar)
+  const widgetDir = resolveWidgetDir(paths, ubersicht)
+  // Uninstall must reach every folder helm might have written into, so an
+  // unreadable preference falls back to the default here rather than giving
+  // up — leaving a live plugin behind is the one thing it must never do.
   for (const path of [
     wrapperPath(paths),
-    join(scannedPluginDir(paths, swiftbar), PLUGIN_NAME),
+    join(pluginDir.dir ?? defaultPluginDir(paths), PLUGIN_NAME),
     // The pre-rename default, so an install from before this moved still
     // gets cleaned up rather than left running.
     join(paths.home, 'Library', 'Application Support', 'SwiftBar', PLUGIN_NAME),
-    join(scannedWidgetDir(paths, ubersicht), WIDGET_NAME),
+    join(widgetDir.dir ?? defaultWidgetDir(paths), WIDGET_NAME),
   ]) {
     if (!isOurScript(path)) continue
     rmSync(path, { force: true })

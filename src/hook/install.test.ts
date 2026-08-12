@@ -11,26 +11,13 @@ import { fileURLToPath } from 'node:url'
 import { resolvePaths } from '../paths.ts'
 import { installHook, uninstallHook } from './install.ts'
 import { hasHelmHook } from './settings.ts'
+import { fakePrefs, NO_PREFS } from './test-prefs.ts'
 
-/** A fake `defaults` domain, so no test ever touches the real SwiftBar. */
-const fakeSwiftBar = (initial: Record<string, string> = {}) => {
-  const store = { ...initial }
-  return {
-    store,
-    deps: {
-      readPref: (k: string) => store[k] ?? null,
-      writePref: (k: string, v: string) => {
-        store[k] = v
-      },
-    },
-  }
-}
 
 // Stateless by default: a shared mutable store would let the first test that
 // installs leak its PluginDirectory into every test after it.
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url))
 
-const NO_PREFS = { readPref: () => null, writePref: () => {} }
 
 const DEPS = {
   now: () => 1786000000000,
@@ -133,9 +120,9 @@ test('SwiftBar plugin 走 wrapper 的絕對路徑 —— 它的 PATH 很精簡',
 
 test('沒設定過時把 SwiftBar 指向我們的資料夾 —— 跳過那個只能手動點的對話框', () => {
   const h = home({})
-  const sb = fakeSwiftBar()
+  const sb = fakePrefs()
   const report = installHook(resolvePaths({ home: h }), {
-    ...DEPS, swiftbarInstalled: true, swiftbar: sb.deps,
+    ...DEPS, swiftbarInstalled: true, swiftbar: sb,
   })
   assert.equal(sb.store['PluginDirectory'], join(h, 'SwiftBar'))
   assert.ok(report.steps.some((s) => s.includes('plugin 資料夾')))
@@ -144,9 +131,9 @@ test('沒設定過時把 SwiftBar 指向我們的資料夾 —— 跳過那個�
 test('SwiftBar 已經指向別的資料夾時，plugin 就裝進去那裡', () => {
   // 那是使用者自己選的，helm 沒有立場把它改掉；裝錯地方則是靜默失效。
   const h = home({})
-  const sb = fakeSwiftBar({ PluginDirectory: join(h, 'my-plugins') })
+  const sb = fakePrefs({ PluginDirectory: join(h, 'my-plugins') })
   installHook(resolvePaths({ home: h }), {
-    ...DEPS, swiftbarInstalled: true, swiftbar: sb.deps,
+    ...DEPS, swiftbarInstalled: true, swiftbar: sb,
   })
   assert.ok(existsSync(join(h, 'my-plugins', 'helm.5s.sh')))
   assert.equal(sb.store['PluginDirectory'], join(h, 'my-plugins'), '不該被覆寫')
@@ -393,25 +380,13 @@ test('在精簡 PATH 下 wrapper 仍然跑得起來', () => {
   assert.match(out, /helm —/)
 })
 
-const fakeUbersicht = (initial: Record<string, string> = {}) => {
-  const store = { ...initial }
-  return {
-    store,
-    deps: {
-      readPref: (k: string) => store[k] ?? null,
-      writePref: (k: string, v: string) => {
-        store[k] = v
-      },
-    },
-  }
-}
 
 const UB = (extra: object = {}) => ({ ...DEPS, ubersichtInstalled: true, ...extra })
 
 test('裝了 Übersicht 就寫出桌面 widget', () => {
   const h = home({})
-  const ub = fakeUbersicht()
-  const report = installHook(resolvePaths({ home: h }), UB({ ubersicht: ub.deps }))
+  const ub = fakePrefs()
+  const report = installHook(resolvePaths({ home: h }), UB({ ubersicht: ub }))
   const widget = join(h, 'Library', 'Application Support', 'Übersicht', 'widgets', 'helm.jsx')
   assert.equal(existsSync(widget), true, report.warnings.join('\n'))
   assert.match(readFileSync(widget, 'utf8'), /export const command = /)
@@ -419,8 +394,8 @@ test('裝了 Übersicht 就寫出桌面 widget', () => {
 
 test('widget 走 wrapper 的絕對路徑 —— Übersicht 的 PATH 一樣很精簡', () => {
   const h = home({})
-  const ub = fakeUbersicht()
-  installHook(resolvePaths({ home: h }), UB({ ubersicht: ub.deps }))
+  const ub = fakePrefs()
+  installHook(resolvePaths({ home: h }), UB({ ubersicht: ub }))
   const widget = readFileSync(
     join(h, 'Library', 'Application Support', 'Übersicht', 'widgets', 'helm.jsx'), 'utf8',
   )
@@ -430,8 +405,8 @@ test('widget 走 wrapper 的絕對路徑 —— Übersicht 的 PATH 一樣很精
 test('Übersicht 已經指定過 widget 資料夾時，裝進它掃描的那一個', () => {
   const h = home({})
   const mine = join(h, 'my-widgets')
-  const ub = fakeUbersicht({ widgetDir: mine })
-  installHook(resolvePaths({ home: h }), UB({ ubersicht: ub.deps }))
+  const ub = fakePrefs({ widgetDir: mine })
+  installHook(resolvePaths({ home: h }), UB({ ubersicht: ub }))
   assert.equal(existsSync(join(mine, 'helm.jsx')), true)
   assert.equal(ub.store['widgetDir'], mine, '使用者選過的資料夾不該被改掉')
 })
@@ -450,8 +425,8 @@ test('別人的 helm 佔住 wrapper 時，widget 改為直接呼叫 node', () =>
   const wrapper = join(h, '.local', 'bin', 'helm')
   mkdirSync(dirname(wrapper), { recursive: true })
   writeFileSync(wrapper, '#!/bin/sh\necho "Kubernetes Helm v3.16.2"\n')
-  const ub = fakeUbersicht()
-  installHook(resolvePaths({ home: h }), UB({ ubersicht: ub.deps }))
+  const ub = fakePrefs()
+  installHook(resolvePaths({ home: h }), UB({ ubersicht: ub }))
   const widget = readFileSync(
     join(h, 'Library', 'Application Support', 'Übersicht', 'widgets', 'helm.jsx'), 'utf8',
   )
@@ -461,15 +436,15 @@ test('別人的 helm 佔住 wrapper 時，widget 改為直接呼叫 node', () =>
 
 test('uninstall 刪得掉自己寫的 widget，但不碰別人的', () => {
   const h = home({})
-  const ub = fakeUbersicht()
+  const ub = fakePrefs()
   const paths = resolvePaths({ home: h })
   const dir = join(h, 'Library', 'Application Support', 'Übersicht', 'widgets')
-  installHook(paths, UB({ ubersicht: ub.deps }))
+  installHook(paths, UB({ ubersicht: ub }))
   assert.equal(existsSync(join(dir, 'helm.jsx')), true)
 
   const theirs = join(dir, 'weather.jsx')
   writeFileSync(theirs, 'export const command = "date"\n')
-  uninstallHook(paths, UB({ ubersicht: ub.deps }))
+  uninstallHook(paths, UB({ ubersicht: ub }))
   assert.equal(existsSync(join(dir, 'helm.jsx')), false)
   assert.equal(existsSync(theirs), true, '別人的 widget 不該被刪')
 })
@@ -479,8 +454,8 @@ test('widget 已存在且不是 helm 寫的就不覆寫', () => {
   const dir = join(h, 'Library', 'Application Support', 'Übersicht', 'widgets')
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, 'helm.jsx'), 'export const command = "my own thing"\n')
-  const ub = fakeUbersicht()
-  const report = installHook(resolvePaths({ home: h }), UB({ ubersicht: ub.deps }))
+  const ub = fakePrefs()
+  const report = installHook(resolvePaths({ home: h }), UB({ ubersicht: ub }))
   assert.match(readFileSync(join(dir, 'helm.jsx'), 'utf8'), /my own thing/)
   assert.ok(report.warnings.some((w) => w.includes('helm.jsx')), report.warnings.join('\n'))
 })

@@ -140,12 +140,16 @@ test('摘要與工具名都有長度上限，不把整份 payload 寫進磁碟',
 })
 
 test('超大 payload 仍在合理時間內完成 —— 舊實作在這裡要 6 秒', () => {
+  // 上限刻意寬。這條測試要擋的是舊 shell 版的 O(n²)（6 秒），不是量效能：
+  // 單獨跑 120-190ms，整套跑（每個檔案一個行程、機器同時忙）會到 800ms 以上。
+  // 500ms 的門檻只是在製造偽陽性，並不會更早抓到那個回歸。
   const heredoc = `cat <<'EOF' > f.txt\n${'content line\n'.repeat(7000)}EOF`
   const started = performance.now()
   const r = runHook(bash(heredoc))
   const elapsed = performance.now() - started
   assert.equal(r.code, 0)
-  assert.ok(elapsed < 500, `98KB 的 heredoc 花了 ${elapsed.toFixed(0)}ms`)
+  assert.equal(summaryOf(r)?.length, 200, '不是只有快，內容也要對')
+  assert.ok(elapsed < 3000, `98KB 的 heredoc 花了 ${elapsed.toFixed(0)}ms`)
 })
 
 test('畸形輸入一律 exit 0 且不寫檔', () => {

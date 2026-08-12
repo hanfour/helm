@@ -8,9 +8,9 @@ import { quarantinePath } from '../projects/prefs.ts'
 import { readLiveMarker } from '../reconcile/live.ts'
 import { hasHelmHook } from './settings.ts'
 import {
-  defaultSwiftBarDeps, PLUGIN_NAME, scannedPluginDir, type SwiftBarDeps,
+  defaultSwiftBarDeps, PLUGIN_NAME, resolvePluginDir, type SwiftBarDeps,
 } from './swiftbar.ts'
-import { defaultUbersichtDeps, scannedWidgetDir, type UbersichtDeps } from './ubersicht.ts'
+import { defaultUbersichtDeps, resolveWidgetDir, type UbersichtDeps } from './ubersicht.ts'
 import { WIDGET_NAME } from './widget.ts'
 
 const ORPHAN_MAX_AGE_MS = 30 * 86_400_000
@@ -193,13 +193,16 @@ function swiftbar(paths: HelmPaths, deps: SwiftBarDeps, installed: boolean): Che
   // Checked against the folder SwiftBar actually scans, not the one helm would
   // have picked. Those differing is precisely the failure that looks like
   // success: plugin installed, executable, and the menu bar still empty.
-  const dir = scannedPluginDir(paths, deps)
-  const plugin = join(dir, PLUGIN_NAME)
+  const scan = resolvePluginDir(paths, deps)
+  if (scan.dir === null) {
+    return { name: 'SwiftBar', ok: false, detail: scan.warning ?? '設定讀不到。' }
+  }
+  const plugin = join(scan.dir, PLUGIN_NAME)
   if (!existsSync(plugin)) {
     return {
       name: 'SwiftBar',
       ok: false,
-      detail: `SwiftBar 掃描的是 ${dir}，裡面沒有 helm 的 plugin。執行 helm install。`,
+      detail: `SwiftBar 掃描的是 ${scan.dir}，裡面沒有 helm 的 plugin。執行 helm install。`,
     }
   }
   // SwiftBar only runs plugins with the executable bit set, and a plugin that
@@ -225,13 +228,16 @@ function ubersicht(paths: HelmPaths, deps: UbersichtDeps, installed: boolean): C
       detail: '未安裝，桌面看板無法運作。brew install --cask ubersicht，裝好後執行 helm install。',
     }
   }
-  const dir = scannedWidgetDir(paths, deps)
-  const widget = join(dir, WIDGET_NAME)
+  const scan = resolveWidgetDir(paths, deps)
+  if (scan.dir === null) {
+    return { name: 'Übersicht', ok: false, detail: scan.warning ?? '設定讀不到。' }
+  }
+  const widget = join(scan.dir, WIDGET_NAME)
   if (!existsSync(widget)) {
     return {
       name: 'Übersicht',
       ok: false,
-      detail: `Übersicht 掃描的是 ${dir}，裡面沒有 helm 的 widget。執行 helm install。`,
+      detail: `Übersicht 掃描的是 ${scan.dir}，裡面沒有 helm 的 widget。執行 helm install。`,
     }
   }
   return { name: 'Übersicht', ok: true, detail: widget }
