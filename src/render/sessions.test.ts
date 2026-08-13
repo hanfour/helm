@@ -111,3 +111,11 @@ test('renderSessions 不修改輸入', () => {
   renderSessions(input, opts)
   assert.deepEqual(input, snapshot)
 })
+
+test('低信心的「已結束」在這裡也不能講得像確定的', () => {
+  const out = renderSessions(proj({
+    sessions: [sess({ lifecycle: 'ended_clean', lifecycleConfidence: 'low' })],
+  }), opts)
+  assert.doesNotMatch(out, /已結束/, out)
+  assert.match(out, /沒有動靜/)
+})

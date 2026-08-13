@@ -36,15 +36,18 @@ export function parseRolloutName(name: string): RolloutName | null {
   )
 
   // `new Date(2026, 12, …)` rolls over into the next year rather than failing,
-  // so the only way to reject an impossible date is to ask what came back.
+  // so the only way to reject an impossible *date* is to ask what came back.
+  //
+  // The time-of-day is deliberately not checked. On the spring-forward day
+  // 02:30 does not exist locally and rolls to 03:30 — rejecting that dropped
+  // the rollout from the scan entirely, uncounted and unmentioned. Being an
+  // hour off is not in the same league as a session vanishing from the board,
+  // and `startedAt` is only ever used for ordering.
   if (
     Number.isNaN(started.getTime())
     || started.getFullYear() !== Number(y)
     || started.getMonth() !== Number(mo) - 1
     || started.getDate() !== Number(d)
-    || started.getHours() !== Number(h)
-    || started.getMinutes() !== Number(mi)
-    || started.getSeconds() !== Number(s)
   ) {
     return null
   }

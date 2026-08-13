@@ -1,7 +1,7 @@
 import type { SessionState } from '../../types.ts'
 import { CODEX_ABANDON_MS, decideCodexLifecycle } from '../../reconcile/lifecycle.ts'
 import { loadMetaCache, resolveMeta, type RolloutMeta } from './meta.ts'
-import { liveCodexCwds } from './processes.ts'
+import { liveCodexCwds, matchesLive } from './processes.ts'
 import { scanRolloutsDetailed, type RolloutFile, type ScanResult } from './scan.ts'
 
 export const CODEX_ADAPTER_ID = 'codex'
@@ -98,7 +98,7 @@ export function discoverCodex(opts: CodexOptions, deps: CodexDeps): CodexResult 
     if (updatedAt < sinceMs && !always.has(cwd)) return []
 
     const verdict = decideCodexLifecycle({
-      cwdHasProcess: live.has(cwd),
+      cwdHasProcess: matchesLive(live, cwd),
       lastEventMs: updatedAt,
       nowMs: opts.nowMs,
     })

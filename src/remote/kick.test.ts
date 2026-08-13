@@ -71,3 +71,17 @@ test('寫不進快取時退避，不是每 5 秒重打一次 gh', () => {
   kickRefreshIfStale(p, NOW + 61_000, spawn)
   assert.equal(spawned, 2, '過了 TTL 才可以再試')
 })
+
+test('~/.helm 不存在時仍然啟動得了更新 —— 第一次跑就是這樣', () => {
+  // tryCreate 沒有 mkdirSync，於是目錄不存在 → openSync ENOENT →
+  // 被當成「拿不到鎖」→ 從不 spawn。使用者第一次跑 helm menu 時
+  // PR 那一區永遠是空的，而且完全無聲。
+  const dir = join(tempDir('helm-kick-'), 'not-created-yet')
+  let spawned = 0
+  kickRefreshIfStale(
+    { cacheFile: join(dir, 'prs.json'), lockFile: join(dir, 'refresh.lock') },
+    NOW,
+    () => { spawned++ },
+  )
+  assert.equal(spawned, 1)
+})

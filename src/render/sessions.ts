@@ -1,5 +1,5 @@
 import type { ProjectView } from '../projects/group.ts'
-import { statusOf, type StatusKey } from '../session-status.ts'
+import { UNEARNED_LABEL, isUnearnedClaim, statusOf, type StatusKey } from '../session-status.ts'
 import type { SessionState } from '../types.ts'
 import { dim, glyph, relativeTime } from './glyphs.ts'
 import type { RenderOptions } from './table.ts'
@@ -34,7 +34,7 @@ function renderSession(s: SessionState, opts: RenderOptions): string {
   const key = statusOf(s)
   const head = [
     glyph(key, s.lifecycleConfidence, opts.color),
-    LABEL[key],
+    isUnearnedClaim(s) ? UNEARNED_LABEL : LABEL[key],
     padTo(s.sessionId.slice(0, SHORT_ID), SHORT_ID),
     relativeTime(s.updatedAt, opts.nowMs),
   ].join('  ')

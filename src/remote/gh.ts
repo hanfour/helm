@@ -31,6 +31,9 @@ export type GhResult<T> =
 
 const MAX_OUTPUT_BYTES = 32 * 1024 * 1024
 
+/** `gh search` needs a bound, and it reports no total to compare against. */
+const SEARCH_LIMIT = 50
+
 export function defaultGhExec(): GhExec {
   return (args) => execFileSync('gh', [...args], {
     encoding: 'utf8',
@@ -51,11 +54,11 @@ export function defaultGhExec(): GhExec {
  *
  * It does not carry review or CI state; `prDetail` fills that in.
  */
-export function searchMyPrs(exec: GhExec): GhResult<{ prs: PrRef[] }> {
+export function searchMyPrs(exec: GhExec): GhResult<{ prs: PrRef[]; truncated?: string }> {
   let raw: string
   try {
     raw = exec([
-      'search', 'prs', '--author', '@me', '--state', 'open', '--limit', '50',
+      'search', 'prs', '--author', '@me', '--state', 'open', '--limit', String(SEARCH_LIMIT),
       '--json', 'number,title,url,isDraft,updatedAt,repository',
     ])
   } catch (err) {
@@ -69,7 +72,12 @@ export function searchMyPrs(exec: GhExec): GhResult<{ prs: PrRef[] }> {
 
   // One malformed entry must not cost the user every other pull request.
   const prs = parsed.flatMap((item) => (isRecord(item) ? toPrRef(item) : []))
-  return { kind: 'ok', prs }
+  // `gh search` returns no total, so hitting the limit exactly is the only
+  // signal available that there may be more. Silently showing 50 of 80 would
+  // be the board asserting something it does not know.
+  return parsed.length >= SEARCH_LIMIT
+    ? { kind: 'ok', prs, truncated: `只顯示最近的 ${SEARCH_LIMIT} 個 PR，可能還有更多。` }
+    : { kind: 'ok', prs }
 }
 
 export function prDetail(repo: string, number: number, exec: GhExec): GhResult<{ detail: PrDetail }> {

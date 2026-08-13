@@ -372,7 +372,7 @@ test('PR 那一行可以點開瀏覽器', () => {
   const out = renderSwiftBar(board([proj({})], {
     prs: [{ repo: 'a/b', number: 1, title: 't', url: 'https://gh/a/b/pull/1', isDraft: false, updatedAt: '', waiting: 'review', waitingLabel: '等人審' }],
   }), OPTS)
-  assert.match(body(out), /href=https:\/\/gh\/a\/b\/pull\/1/)
+  assert.match(body(out), /href="https:\/\/gh\/a\/b\/pull\/1"/)
 })
 
 test('沒有 PR 時不畫那一區 —— 不佔空間也不說謊', () => {
@@ -408,4 +408,43 @@ test('沒有專案且 gh 沒登入時，那句話也要出現', () => {
 test('沒有專案時 adapter 的失敗也要說', () => {
   const out = renderSwiftBar(board([], { adapterFailures: ['codex：讀不到 /x'] }), OPTS)
   assert.match(body(out), /讀不到 \/x/)
+})
+
+test('PR 的 href 也要引號 —— 那是唯一沒過 param() 的不可信值', () => {
+  // clean() 拿掉 | 與控制字元，但保留空白，而 | 之後是照空白切的 key=value。
+  // GitHub 回的 URL 不可能含空白，所以走不通 —— 但 prs.json 被寫壞時就成立，
+  // 而同一支檔案裡其他每個進參數區的值都有引號。
+  const out = renderSwiftBar(board([proj({})], {
+    prs: [{
+      repo: 'a/b', number: 1, title: 't',
+      url: 'https://x/ bash="/bin/sh" param1=-c param2="touch /tmp/PWNED"',
+      isDraft: false, updatedAt: '', waiting: 'review', waitingLabel: '等人審',
+    }],
+  }), OPTS)
+  const line = body(out).split('\n').find((l) => l.includes('a/b#1')) ?? ''
+  const params = line.slice(line.indexOf('|') + 1).trim()
+  // 整串必須落在一組引號裡 —— 那樣 SwiftBar 會把它當成 href 的值，
+  // 而不是切成 bash=/param1=/param2= 這幾個參數。
+  assert.match(params, /^href="[^"]*"$/, `注入成功了：${params}`)
+})
+
+test('低信心的「已結束」不能講得像確定的 —— helm 其實不知道', () => {
+  // lifecycle.ts 借用 ended_clean 表示「helm 停止猜測」，理由是它在 UI 上
+  // 的效果是「不畫點」。但那只描述了三個呈現面裡的一個：選單列、
+  // helm sessions、helm status 都直接印出「已結束」這個詞，而那是宣稱。
+  const out = renderSwiftBar(board([proj({
+    aggregateStatus: null,
+    sessions: [sess({ adapterId: 'codex', lifecycle: 'ended_clean', lifecycleConfidence: 'low' })],
+  })]), OPTS)
+  const line = body(out).split('\n').find((l) => l.includes('●?')) ?? ''
+  assert.doesNotMatch(line, /已結束/, `低信心不該講「已結束」：${line}`)
+  assert.match(line, /不確定|無法確認|沒有動靜/, line)
+})
+
+test('高信心的已結束照樣講「已結束」', () => {
+  const out = renderSwiftBar(board([proj({
+    aggregateStatus: null,
+    sessions: [sess({ lifecycle: 'ended_clean', lifecycleConfidence: 'high' })],
+  })]), OPTS)
+  assert.match(body(out), /已結束/)
 })

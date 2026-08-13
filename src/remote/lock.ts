@@ -1,4 +1,7 @@
-import { openSync, closeSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs'
+import {
+  closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync,
+} from 'node:fs'
+import { dirname } from 'node:path'
 
 /**
  * How long a refresh may hold the lock before it is assumed dead.
@@ -59,6 +62,10 @@ export function releaseRefreshLock(file: string, token?: number): void {
 function tryCreate(file: string, nowMs: number): boolean {
   let fd: number | null = null
   try {
+    // The directory does not exist on a first run, and `openSync` would fail
+    // with ENOENT — read as "somebody else holds the lock", so the very first
+    // refresh never started and said nothing about it.
+    mkdirSync(dirname(file), { recursive: true })
     fd = openSync(file, 'wx', 0o600)
     writeSync(fd, String(nowMs))
     return true

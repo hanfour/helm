@@ -1,7 +1,7 @@
 import type { Board } from '../board.ts'
 import type { ProjectView } from '../projects/group.ts'
 import { ACTIVITY_WINDOW_DAYS } from '../projects/include.ts'
-import { statusOf, type StatusKey } from '../session-status.ts'
+import { isUnearnedClaim, statusOf, UNEARNED_LABEL, type StatusKey } from '../session-status.ts'
 import type { SessionState } from '../types.ts'
 import { relativeTime } from './glyphs.ts'
 
@@ -101,7 +101,10 @@ function renderPrs(board: Board, opts: MenuOptions): string[] {
     'PR',
     ...board.prs.map((pr) =>
       `--${clean(`${pr.repo}#${pr.number}`)}  ${clean(pr.waitingLabel)}  ${label(pr.title)}`
-      + ` | href=${clean(pr.url)}`),
+      // Quoted like every other value that lands in SwiftBar's parameter
+      // region: `clean()` strips `|` and control characters but keeps spaces,
+      // and everything after `|` is split on whitespace into key=value pairs.
+      + ` | href=${param(pr.url)}`),
   ]
 }
 
@@ -140,8 +143,9 @@ function renderSession(s: SessionState, opts: MenuOptions): string[] {
   // about the very same field.
   const short = clean(s.sessionId).slice(0, SHORT_ID)
   const mark = `${SHAPE[key]}${s.lifecycleConfidence === 'low' ? '?' : ''}`
+  const label = isUnearnedClaim(s) ? UNEARNED_LABEL : LABEL[key]
   return [
-    `--${mark} ${LABEL[key]}  ${short}  ${relativeTime(s.updatedAt, opts.nowMs)}${liveSuffix(s)}`,
+    `--${mark} ${label}  ${short}  ${relativeTime(s.updatedAt, opts.nowMs)}${liveSuffix(s)}`,
     `----開終端機接續 | bash="${opts.helmBin}" param1=open param2=-- param3=${param(short)} terminal=false refresh=true`,
     // Generating a brief takes the measured 57-86 s, so it opens a terminal
     // where the user can watch it rather than appearing to hang the menu.

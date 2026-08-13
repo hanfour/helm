@@ -56,3 +56,27 @@ test('uuid 少一段或多一段時回 null', () => {
 test('帶著目錄的路徑不被接受 —— 這裡只認檔名', () => {
   assert.equal(parseRolloutName(`2026/08/03/rollout-2026-08-03T14-25-24-${ID}.jsonl`), null)
 })
+
+test('DST 春季跳過的那一小時，檔案不會整個消失', () => {
+  // new Date(y, mo-1, d, 2, 30) 在那天的 America/New_York 會滾到 03:30，
+  // 於是 getHours() !== h 把整個檔名判為無效 —— rollout 從掃描結果消失、
+  // 不計入 invalid、看板一個字都不提。時間差一小時，跟整個 session 不見，
+  // 是完全不同量級的問題。
+  const before = process.env['TZ']
+  process.env['TZ'] = 'America/New_York'
+  try {
+    const r = parseRolloutName(`rollout-2026-03-08T02-30-00-${ID}.jsonl`)
+    assert.notEqual(r, null, 'DST 跳過的那一小時不該讓檔案消失')
+    assert.equal(r?.rolloutId, ID)
+  } finally {
+    if (before === undefined) delete process.env['TZ']
+    else process.env['TZ'] = before
+  }
+})
+
+test('真正無效的日期仍然拒絕', () => {
+  // 上面那個放寬不能連帶讓 2 月 30 日之類的東西也通過。
+  for (const stamp of ['2026-13-03T14-25-24', '2026-02-30T14-25-24', '2026-08-32T14-25-24']) {
+    assert.equal(parseRolloutName(`rollout-${stamp}-${ID}.jsonl`), null, stamp)
+  }
+})

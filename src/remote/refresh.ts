@@ -76,7 +76,7 @@ export function refreshPrs(
       prs,
       degraded: ranOut
         ? `PR 太多，這次只更新了 ${prs.length}/${listing.prs.length} 個，其餘下次補上。`
-        : null,
+        : listing.truncated ?? null,
     })
     return true
   } catch {

@@ -187,3 +187,22 @@ test('斷網有自己的一句話，不是把整串 API URL 印到選單列上',
   assert.match(reason, /網路|連線/)
   assert.doesNotMatch(reason, /https:\/\//, '不該把 URL 印出來')
 })
+
+test('PR 數量剛好撞到上限時要說出來 —— 靜默截斷等於謊報', () => {
+  // gh 不回總數，所以第 51 個之後直接不存在，helm 也無從得知。
+  // 至少在剛好等於上限時提醒使用者可能還有更多。
+  const many = Array.from({ length: 50 }, (_, i) => ({
+    number: i + 1, title: 't', url: 'u', isDraft: false, updatedAt: '',
+    repository: { nameWithOwner: 'a/b' },
+  }))
+  const r = searchMyPrs(ok(many))
+  assert.equal(r.kind, 'ok')
+  assert.equal(r.kind === 'ok' ? r.prs.length : 0, 50)
+  assert.match(r.kind === 'ok' ? (r.truncated ?? '') : '', /50|更多/)
+})
+
+test('沒撞到上限時不提', () => {
+  const few = [{ number: 1, title: 't', url: 'u', isDraft: false, updatedAt: '', repository: { nameWithOwner: 'a/b' } }]
+  const r = searchMyPrs(ok(few))
+  assert.equal(r.kind === 'ok' ? r.truncated : 'x', undefined)
+})

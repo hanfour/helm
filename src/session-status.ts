@@ -22,3 +22,19 @@ export function aggregateStatus(sessions: readonly SessionState[]): StatusKey | 
   const keys = new Set(sessions.map(statusOf))
   return PRIORITY.find((k) => keys.has(k)) ?? null
 }
+
+/**
+ * Whether a verdict is too uncertain to be stated as a fact.
+ *
+ * `ended_clean` is borrowed by the Codex adapter to mean "helm has stopped
+ * guessing" — justified by its effect on the desktop being to draw no dot at
+ * all. But the menu bar and `helm sessions` print the word 「已結束」, which is
+ * a claim helm has not earned. Every face that renders a label has to ask
+ * this; putting it here is what stops the third one from forgetting.
+ */
+export function isUnearnedClaim(s: SessionState): boolean {
+  return s.lifecycleConfidence === 'low' && statusOf(s) === 'ended'
+}
+
+/** What to say instead. */
+export const UNEARNED_LABEL = '沒有動靜'

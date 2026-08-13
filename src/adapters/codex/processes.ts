@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { realpathSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 
 /**
@@ -76,4 +77,35 @@ function lsofCwds(pids: readonly number[]): string[] {
     .split('\n')
     .filter((line) => line.startsWith('n'))
     .map((line) => line.slice(1))
+}
+
+/**
+ * Whether a session's recorded cwd is one of the running ones.
+ *
+ * `lsof` reports resolved paths — a process in `/tmp/x` comes back as
+ * `/private/tmp/x`, and anything under `$TMPDIR` as `/private/var/folders/…`.
+ * Codex records the literal path it was started with. Comparing the two as
+ * strings never matches, so a running session gets drawn as finished; four of
+ * the 192 rollouts on this machine carry exactly that shape of path.
+ *
+ * Both sides are resolved before comparing, and a path that cannot be
+ * resolved (deleted since) falls back to itself rather than throwing.
+ */
+export function matchesLive(live: ReadonlySet<string>, cwd: string): boolean {
+  if (live.has(cwd)) return true
+  const resolved = resolve(cwd)
+  for (const candidate of live) {
+    if (resolve(candidate) === resolved) return true
+  }
+  return false
+}
+
+function resolve(path: string): string {
+  try {
+    return realpathSync(path)
+  } catch {
+    // Gone since, or never existed. Comparing the literal value is the most
+    // this can honestly do.
+    return path
+  }
 }
