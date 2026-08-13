@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { WIDGET_MARKER, buildWidget } from './widget.ts'
+import { renderSwiftBar } from '../render/swiftbar.ts'
 
 const HELM = '/Users/x/.local/bin/helm'
 const widget = (argv: readonly string[] = [HELM, 'status', '--json']) => buildWidget(argv)
@@ -85,14 +86,28 @@ const viewOf = () => evalFn(widget(), 'viewOf') as unknown as
   (o: unknown, e: unknown, n: number) => Record<string, never>
 const view = (board: unknown, nowMs = NOW) => viewOf()(JSON.stringify(board), null, nowMs) as never
 
-const proj = (over: Record<string, unknown> = {}) => ({
-  path: `/p/${String(over['name'] ?? 'a')}`,
-  name: 'a',
-  aggregateStatus: 'idle',
-  lastActivityMs: NOW,
-  sessions: [],
-  ...over,
-})
+/** 一個貼合 aggregateStatus 的 session，讓沒有指定 sessions 的案例仍是真實形狀。 */
+const SESSION_FOR: Record<string, Record<string, unknown>> = {
+  busy: { nativeStatus: 'busy', lifecycle: 'running' },
+  crashed: { nativeStatus: 'idle', lifecycle: 'crashed' },
+  idle: { nativeStatus: 'idle', lifecycle: 'running' },
+  null: { nativeStatus: 'idle', lifecycle: 'ended_clean' },
+}
+
+const proj = (over: Record<string, unknown> = {}) => {
+  const agg = 'aggregateStatus' in over ? over['aggregateStatus'] : 'idle'
+  return {
+    path: `/p/${String(over['name'] ?? 'a')}`,
+    name: 'a',
+    aggregateStatus: agg,
+    lastActivityMs: NOW,
+    // groupIntoProjects 是從 session 的 cwd 長出專案的，所以「有專案但沒有
+    // session」在真實資料裡不存在。fixture 用空陣列會讓數 session 的斷言
+    // 全部落在一個機器上到不了的狀態。
+    sessions: [SESSION_FOR[String(agg)] ?? SESSION_FOR['idle']],
+    ...over,
+  }
+}
 const board = (over: Record<string, unknown> = {}) =>
   ({ projects: [], invalid: 0, prefsHealth: 'ok', adapterFailures: [], prs: [], prDegraded: null, ...over })
 
@@ -125,7 +140,51 @@ test('輸出是合法 JSON 但沒有專案清單時也說出來', () => {
   }
 })
 
-test('標題只數真的在跑的專案，而且中斷優先', () => {
+test('標題數的是 session —— 一個專案裡兩個在跑就是 2', () => {
+  // 實測 2026-08-13：使用者兩個 terminal 在跑、cwd 同一個，兩個介面都寫
+  // 「1 在跑」。專案是從 session 的 cwd 長出來的，不是使用者開的東西。
+  const busy = { nativeStatus: 'busy', lifecycle: 'running' }
+  const word = (view(board({
+    projects: [proj({ aggregateStatus: 'busy', sessions: [busy, busy] })],
+  })) as unknown as { title: { word: string } }).title.word
+  assert.match(word, /^2 在跑/, word)
+})
+
+test('桌面與選單列對同一份資料給同一個數字', () => {
+  // 這兩支檔案各有一份計數邏輯，而畫面上只有數字 —— 單位一旦分岔，
+  // 使用者無從得知兩邊在數不同的東西。舊註解防的就是這件事，但它靠的是
+  // 兩處註解互相提醒；這條測試讓分岔直接變紅。
+  const mk = (nativeStatus: string, lifecycle: string) => ({
+    adapterId: 'claude-code', sessionId: 'x', cwd: '/p/a', pid: null, procStart: null,
+    startedAt: NOW, updatedAt: NOW, nativeStatus, kind: 'interactive', name: '',
+    transcriptPath: null, transcriptMtimeMs: null, lifecycle,
+    lifecycleConfidence: 'high', live: null,
+  })
+  const cases: Record<string, unknown>[][] = [
+    [{ aggregateStatus: 'busy', sessions: [mk('busy', 'running'), mk('busy', 'running')] }],
+    [{ aggregateStatus: 'crashed', sessions: [mk('idle', 'crashed'), mk('idle', 'crashed')] }],
+    [{ aggregateStatus: 'idle', sessions: [mk('idle', 'running'), mk('idle', 'running')] }],
+    [
+      { aggregateStatus: 'busy', sessions: [mk('busy', 'running'), mk('idle', 'running')] },
+      { aggregateStatus: 'busy', sessions: [mk('busy', 'running')] },
+    ],
+    [{ aggregateStatus: null, sessions: [mk('idle', 'ended_clean')] }],
+  ]
+  for (const projects of cases) {
+    const full = projects.map((p) => proj(p))
+    const desktop = (view(board({ projects: full })) as unknown as { title: { word: string } }).title.word
+    const menu = renderSwiftBar(
+      { projects: full, invalid: 0, prefsHealth: 'ok', adapterFailures: [], prs: [], prDegraded: null } as never,
+      { nowMs: NOW, helmBin: HELM },
+    ).split('\n')[0] ?? ''
+    // 選單列的標題是「⚓ N 詞 | color=…」，桌面的 word 是「N 詞」。
+    const menuWord = menu.replace(/^⚓ ?/, '').split(' |')[0] ?? ''
+    assert.equal(menuWord === '' ? '都閒著' : menuWord, desktop,
+      `兩邊不一致：選單列 ${JSON.stringify(menu)}、桌面 ${JSON.stringify(desktop)}`)
+  }
+})
+
+test('標題只數真的在跑的，而且中斷優先', () => {
   assert.match(
     (view(board({ projects: [proj({ aggregateStatus: 'busy' }), proj({ aggregateStatus: 'busy' }),
       proj({ aggregateStatus: null }), proj()] })) as unknown as { title: { word: string } }).title.word,

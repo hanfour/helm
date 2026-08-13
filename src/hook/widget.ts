@@ -72,10 +72,26 @@ function dotOf(status) {
   return DOT[status] || null
 }
 
-// 跟選單列同一套優先序與同一個計數單位（專案）。兩邊對同一份資料
+// session-status.ts 的 statusOf 的複本 —— 這個檔案是 Übersicht 直接載入的
+// 獨立模組，import 不進來。兩份定義分岔會讓桌面與選單列說出不同的數字，
+// 所以 widget.test.ts 有一條測試拿兩邊的標題逐案比對。
+function statusOf(s) {
+  if (s.lifecycle === 'crashed') return 'crashed'
+  if (s.lifecycle === 'ended_clean') return 'ended'
+  return s.nativeStatus === 'busy' ? 'busy' : 'idle'
+}
+
+// 跟選單列同一套優先序與同一個計數單位（session）。兩邊對同一份資料
 // 說出不同的數字，比少講一個數字更糟。
+//
+// 數過專案，那是錯的一邊：使用者在同一個 repo 開兩個 terminal 時，
+// 兩邊都寫「1 在跑」。專案是從 session 的 cwd 長出來的，不是使用者開的東西。
 function titleOf(projects) {
-  const count = (k) => projects.filter((p) => p.aggregateStatus === k).length
+  const keys = []
+  for (const p of projects) {
+    for (const s of p.sessions || []) keys.push(statusOf(s))
+  }
+  const count = (k) => keys.filter((x) => x === k).length
   const crashed = count('crashed')
   if (crashed > 0) return { word: crashed + ' 中斷', color: DOT.crashed }
   const busy = count('busy')

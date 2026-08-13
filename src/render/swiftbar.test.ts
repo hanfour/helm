@@ -331,10 +331,15 @@ test('clean 同時處理管線字元與換行', () => {
   assert.match(out, /^a bc {2}/m)
 })
 
-test('標題數的是專案，跟桌面 widget 同一個單位', () => {
-  // 兩邊看的是同一份資料。之前選單列數 session、widget 數專案，於是
-  // 一個專案裡三個 session 在跑時，選單列寫「3 在跑」而桌面寫「1 在跑」。
-  // 畫面上只有數字，使用者無從知道兩者在數不同的東西。
+test('標題數的是在跑的 session，跟桌面 widget 同一個單位', () => {
+  // 兩邊看的是同一份資料，單位必須一致 —— 曾經選單列數 session、widget
+  // 數專案，同一時刻一邊寫「3 在跑」一邊寫「1 在跑」，畫面上只有數字，
+  // 使用者無從知道兩者在數不同的東西。
+  //
+  // 當時統一到「專案」，那是錯的一邊。實測 2026-08-13：使用者兩個 terminal
+  // 在跑、cwd 都是 super-dsp-2.0，選單列寫「1 在跑」—— 在同一個專案開多個
+  // terminal 是再常見不過的用法，而標題把它們摺掉了。使用者數的是 terminal，
+  // 一個 terminal 就是一個 session。
   const out = renderSwiftBar(board([proj({
     aggregateStatus: 'busy',
     sessions: [
@@ -343,10 +348,37 @@ test('標題數的是專案，跟桌面 widget 同一個單位', () => {
       sess({ sessionId: 'cccccccc-3456-7890-abcd-ef1234567890', nativeStatus: 'busy' }),
     ],
   })]), OPTS)
-  assert.match(title(out), /⚓ 1 在跑/, title(out))
+  assert.match(title(out), /⚓ 3 在跑/, title(out))
 })
 
-test('多個專案時數的是專案數', () => {
+test('同一個專案裡兩個 terminal 在跑，標題要說 2', () => {
+  // 這正是回報的症狀。摺成專案之後它跟「一個 terminal 在跑」長得一模一樣。
+  const two = renderSwiftBar(board([proj({
+    aggregateStatus: 'busy',
+    sessions: [
+      sess({ nativeStatus: 'busy' }),
+      sess({ sessionId: 'bbbbbbbb-3456-7890-abcd-ef1234567890', nativeStatus: 'busy' }),
+    ],
+  })]), OPTS)
+  const one = renderSwiftBar(board([proj({
+    aggregateStatus: 'busy', sessions: [sess({ nativeStatus: 'busy' })],
+  })]), OPTS)
+  assert.match(title(two), /⚓ 2 在跑/, title(two))
+  assert.notEqual(title(two), title(one), '兩個在跑跟一個在跑不能長得一樣')
+})
+
+test('中斷也數 session —— 同一專案裡兩個斷掉就是兩個要撿回來', () => {
+  const out = renderSwiftBar(board([proj({
+    aggregateStatus: 'crashed',
+    sessions: [
+      sess({ lifecycle: 'crashed' }),
+      sess({ sessionId: 'bbbbbbbb-3456-7890-abcd-ef1234567890', lifecycle: 'crashed' }),
+    ],
+  })]), OPTS)
+  assert.match(title(out), /⚓ 2 中斷/, title(out))
+})
+
+test('多個專案時把每個專案在跑的 session 加起來', () => {
   const out = renderSwiftBar(board([
     proj({ path: '/a', aggregateStatus: 'busy', sessions: [sess({ nativeStatus: 'busy' })] }),
     proj({ path: '/b', aggregateStatus: 'busy', sessions: [sess({ nativeStatus: 'busy' })] }),

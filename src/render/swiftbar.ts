@@ -47,15 +47,21 @@ export function renderSwiftBar(board: Board, opts: MenuOptions): string {
 }
 
 /**
- * Counts projects, not sessions — the same unit the desktop widget uses.
+ * Counts sessions, not projects — the same unit the desktop widget uses.
  *
- * They used to differ, so one project with three running sessions gave
- * 「⚓ 3 在跑」in the menu bar and 「1 在跑」on the desktop at the same moment.
- * Both are defensible; showing both at once is not, because the screen carries
- * only the number.
+ * The two surfaces must agree: they used to differ, so one project with three
+ * running sessions gave 「⚓ 3 在跑」in the menu bar and 「1 在跑」on the desktop
+ * at the same moment, and the screen carries only the number.
+ *
+ * That was unified on projects, which was the wrong side. Measured
+ * 2026-08-13: two terminals running, both with cwd `super-dsp-2.0`, and the
+ * menu bar said 「1 在跑」— indistinguishable from a single terminal. Several
+ * terminals in one repository is the ordinary way to work, and rolling them
+ * up made the most common case the one the title could not express. What the
+ * user counts is terminals, and one terminal is one session.
  */
 function renderTitle(projects: readonly ProjectView[]): string {
-  const keys = projects.map((p) => p.aggregateStatus)
+  const keys = projects.flatMap((p) => p.sessions.map(statusOf))
   for (const key of ['crashed', 'busy', 'idle'] as const) {
     const n = keys.filter((k) => k === key).length
     if (n === 0) continue
