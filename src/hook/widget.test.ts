@@ -356,3 +356,29 @@ test('沒有 PR 也沒有錯誤時那一區是空的', () => {
   const v = view(board({ projects: [proj()] })) as unknown as { prs: unknown[] }
   assert.deepEqual(v.prs, [])
 })
+
+test('Codex 的低信心 running 也要跟高信心的分開畫（規格 §6）', () => {
+  // isUncertain 原本只涵蓋 crashed 與 ended_clean，把 running 排除掉了 ——
+  // 而 running 正是 Codex 最常見的狀態。於是桌面把「有行程在跑，低信心」
+  // 畫得跟 Claude Code 那個有註冊表撐著的判定一模一樣。
+  const low = { nativeStatus: null, lifecycle: 'running', lifecycleConfidence: 'low' }
+  const high = { nativeStatus: 'idle', lifecycle: 'running', lifecycleConfidence: 'high' }
+  const uncertainOf = (sessions: unknown[], aggregateStatus = 'idle') =>
+    (view(board({ projects: [proj({ sessions, aggregateStatus })] })) as
+      unknown as { rows: { uncertain: boolean }[] }).rows[0]?.uncertain
+  assert.equal(uncertainOf([low]), true, '低信心就要標出來，不論是哪一種 lifecycle')
+  assert.equal(uncertainOf([high]), false)
+})
+
+test('全部結束的低信心專案不會變成看不見的點', () => {
+  // aggregateStatus 為 null 時 dot 是 null，JSX 畫的是 transparent ——
+  // 於是 >6 小時那段的 ◍ 等於看不見。低信心的標記不該依賴顏色。
+  const rows = (view(board({
+    projects: [proj({
+      aggregateStatus: null,
+      sessions: [{ nativeStatus: null, lifecycle: 'ended_clean', lifecycleConfidence: 'low' }],
+    })],
+  })) as unknown as { rows: { uncertain: boolean; dot: string | null }[] }).rows
+  assert.equal(rows[0]?.uncertain, true)
+  assert.equal(rows[0]?.dot, null, '不畫點是對的')
+})

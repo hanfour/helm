@@ -387,3 +387,25 @@ test('PR 讀不到時說出原因與下一步，而不是靜靜留白', () => {
   assert.match(body(out), /gh auth login/)
   assert.match(body(out), /color=orange/)
 })
+
+test('沒有專案時，PR 區與降級訊息仍然要畫 —— 桌面一直都有畫', () => {
+  // renderBody 的 early return 讓整個 PR 區與 gh 的降級訊息一起消失，
+  // 而它上面三行自己的註解寫著「Warnings belong on the empty board too
+  // — arguably more so」。放假回來、換機器、或全部 hide 掉的時候，
+  // 選單列什麼都不說，桌面卻說了。
+  const out = renderSwiftBar(board([], {
+    prs: [{ repo: 'a/b', number: 1, title: 't', url: 'u', isDraft: false, updatedAt: '', waiting: 'changes', waitingLabel: '等你改' }],
+  }), OPTS)
+  assert.match(body(out), /a\/b#1/)
+  assert.match(body(out), /等你改/)
+})
+
+test('沒有專案且 gh 沒登入時，那句話也要出現', () => {
+  const out = renderSwiftBar(board([], { prDegraded: 'gh 尚未登入，執行 gh auth login。' }), OPTS)
+  assert.match(body(out), /gh auth login/)
+})
+
+test('沒有專案時 adapter 的失敗也要說', () => {
+  const out = renderSwiftBar(board([], { adapterFailures: ['codex：讀不到 /x'] }), OPTS)
+  assert.match(body(out), /讀不到 \/x/)
+})

@@ -1,7 +1,7 @@
 import { acquireRefreshLock, releaseRefreshLock } from './lock.ts'
 import { writePrCache, type CachedPr } from './cache.ts'
 import { prDetail, searchMyPrs, type GhExec } from './gh.ts'
-import { waitingOn } from './waiting.ts'
+import { unknownWaiting, waitingOn } from './waiting.ts'
 
 export interface RefreshPaths {
   cacheFile: string
@@ -34,12 +34,16 @@ export function refreshPrs(
 
     const prs: CachedPr[] = listing.prs.map((pr) => {
       const detail = prDetail(pr.repo, pr.number, exec)
-      // One unreachable PR must not delete the others. Falling back to "not
-      // reviewed yet" states the least: it never claims a PR is ready.
-      const status = detail.kind === 'ok'
-        ? { isDraft: pr.isDraft, reviewDecision: detail.detail.reviewDecision, checks: detail.detail.checks }
-        : { isDraft: pr.isDraft, reviewDecision: null, checks: [] }
-      const waiting = waitingOn(status)
+      // One unreachable PR must not delete the others — but it must not be
+      // dressed up as a verdict either. Falling back to 「等人審」claimed the
+      // ball was with the reviewer when it might be with the user.
+      const waiting = detail.kind === 'ok'
+        ? waitingOn({
+          isDraft: pr.isDraft,
+          reviewDecision: detail.detail.reviewDecision,
+          checks: detail.detail.checks,
+        })
+        : unknownWaiting()
       return { ...pr, waiting: waiting.kind, waitingLabel: waiting.label }
     })
 

@@ -47,18 +47,6 @@ test('清單失敗時把原因寫進快取 —— 下次不用再問一遍', () 
   assert.deepEqual(cache?.prs, [])
 })
 
-test('單一 PR 的狀態拿不到時仍然列出它，只是標為未知', () => {
-  // 一個 PR 的 detail 失敗不該讓其餘的一起消失。
-  const p = paths()
-  refreshPrs(p, (args) => {
-    if (args[0] === 'search') return JSON.stringify(listing)
-    throw Object.assign(new Error('x'), { status: 1, stderr: 'not found' })
-  }, NOW)
-  const cache = readPrCache(p.cacheFile)
-  assert.equal(cache?.prs.length, 1)
-  assert.equal(cache?.prs[0]?.waiting, 'review', '問不到就當還沒審，不猜')
-})
-
 test('鎖被別人持有時完全不呼叫 gh', () => {
   // 看板每 5 秒跑一次，而一次 gh 要好幾秒。沒有這道閘，一分鐘內會有
   // 十幾個行程搶著做同一件事。
@@ -83,4 +71,33 @@ test('gh 中途丟例外時鎖也要放開 —— 否則永遠卡住', () => {
   const p = paths()
   refreshPrs(p, () => { throw new Error('boom') }, NOW)
   assert.equal(refreshPrs(p, exec(), NOW + 1000), true)
+})
+
+test('單一 PR 的狀態拿不到時要說出來，不是畫成信心十足的「等人審」', () => {
+  // helm 根本沒拿到這個 PR 的 review 與 CI 狀態。它可能可合併、可能
+  // 等你改、也可能 CI 全紅。畫成「等人審」是主張球在審查者手上，
+  // 而球可能在使用者手上。prDetail 已經把原因算出來了，refreshPrs 丟掉了它。
+  const p = paths()
+  refreshPrs(p, (args) => {
+    if (args[0] === 'search') return JSON.stringify(listing)
+    throw Object.assign(new Error('x'), { status: 1, stderr: 'HTTP 502: Bad Gateway' })
+  }, NOW)
+  const cache = readPrCache(p.cacheFile)
+  assert.equal(cache?.prs.length, 1, 'PR 本身仍要列出來')
+  assert.equal(cache?.prs[0]?.waiting, 'unknown')
+  assert.match(cache?.prs[0]?.waitingLabel ?? '', /狀態未知|讀不到/)
+})
+
+test('部分 PR 拿不到狀態時，其餘的照常', () => {
+  const p = paths()
+  const two = [listing[0], { ...listing[0], number: 999 }]
+  refreshPrs(p, (args) => {
+    if (args[0] === 'search') return JSON.stringify(two)
+    if (args.includes('999')) throw Object.assign(new Error('x'), { status: 1, stderr: 'nope' })
+    return JSON.stringify({ reviewDecision: 'APPROVED', statusCheckRollup: [] })
+  }, NOW)
+  const cache = readPrCache(p.cacheFile)
+  const byNumber = Object.fromEntries((cache?.prs ?? []).map((pr) => [pr.number, pr.waiting]))
+  assert.equal(byNumber[4853], 'mergeable')
+  assert.equal(byNumber[999], 'unknown')
 })

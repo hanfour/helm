@@ -9,9 +9,24 @@ import type { SessionState } from '../types.ts'
  * mtime — and pretending one reconcile pass fits both would put CLI-specific
  * branching into the core, which spec §5.1 rules out.
  */
+export interface AdapterResult {
+  sessions: SessionState[]
+  invalid: number
+  /**
+   * Set when the adapter knows it is handing back less than it should.
+   *
+   * Throwing is not enough on its own: an adapter that catches its own I/O
+   * errors — which both of helm's do, deliberately, so one unreadable
+   * directory cannot take the board down — never reaches the `catch` below.
+   * Measured: with all three data directories chmod 000, `failures` was
+   * still empty. Nothing could make it speak.
+   */
+  failure?: string
+}
+
 export interface Adapter {
   id: string
-  collect: () => { sessions: SessionState[]; invalid: number }
+  collect: () => AdapterResult
 }
 
 export interface CollectResult {
@@ -40,6 +55,8 @@ export function collectFromAdapters(adapters: readonly Adapter[]): CollectResult
       const result = adapter.collect()
       sessions.push(...result.sessions)
       invalid += result.invalid
+      // Partial results still count — the adapter kept what it could reach.
+      if (result.failure !== undefined) failures.push(`${adapter.id}：${result.failure}`)
     } catch (err) {
       failures.push(
         `${adapter.id} 這個來源讀不到：${err instanceof Error ? err.message : String(err)}`,

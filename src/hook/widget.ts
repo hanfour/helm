@@ -97,10 +97,12 @@ function activeLive(p) {
 }
 
 // 選單列在信心低時畫的是 ●? —— 猜測要看得出來是猜測。
+// 原本只涵蓋 crashed 與 ended_clean，把 running 排除掉了 —— 而 running
+// 正是 Codex 最常見的狀態（有行程、或 30 分鐘內動過）。規格 §6 要求
+// 「UI 須區分呈現，不得與 Claude Code 的高信心判定混用同一視覺樣式」，
+// 而低信心就是低信心，跟它猜的是哪一種狀態無關。
 function isUncertain(p) {
-  return (p.sessions || []).some(
-    (s) => s.lifecycleConfidence === 'low' && (s.lifecycle === 'crashed' || s.lifecycle === 'ended_clean'),
-  )
+  return (p.sessions || []).some((s) => s.lifecycleConfidence === 'low')
 }
 
 function liveTextOf(live) {

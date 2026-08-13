@@ -2,7 +2,7 @@ import type { SessionState } from '../../types.ts'
 import { CODEX_ABANDON_MS, decideCodexLifecycle } from '../../reconcile/lifecycle.ts'
 import { loadMetaCache, resolveMeta, type RolloutMeta } from './meta.ts'
 import { liveCodexCwds } from './processes.ts'
-import { scanRollouts, type RolloutFile } from './scan.ts'
+import { scanRolloutsDetailed, type RolloutFile, type ScanResult } from './scan.ts'
 
 export const CODEX_ADAPTER_ID = 'codex'
 
@@ -16,7 +16,7 @@ export interface CodexOptions {
 }
 
 export interface CodexDeps {
-  scan: (sessionsDir: string, sinceMs: number) => RolloutFile[]
+  scan: (sessionsDir: string, sinceMs: number) => ScanResult
   meta: (file: RolloutFile) => RolloutMeta | null
   liveCwds: () => Set<string>
   flush: () => void
@@ -26,12 +26,14 @@ export interface CodexResult {
   sessions: SessionState[]
   /** Rollouts helm could not read. Surfaced, never swallowed. */
   invalid: number
+  /** Set when a directory exists but could not be read. */
+  failure?: string
 }
 
 export function defaultCodexDeps(cacheFile: string): CodexDeps {
   const cache = loadMetaCache(cacheFile)
   return {
-    scan: scanRollouts,
+    scan: scanRolloutsDetailed,
     meta: (file) => resolveMeta(file, cache),
     liveCwds: () => liveCodexCwds(),
     flush: () => cache.flush(),
@@ -55,14 +57,15 @@ export function discoverCodex(opts: CodexOptions, deps: CodexDeps): CodexResult 
   const sinceMs = opts.nowMs - opts.windowDays * 86_400_000
   const always = new Set(opts.alwaysInclude ?? [])
 
-  let files: RolloutFile[]
+  let scanned: ScanResult
   try {
-    files = deps.scan(opts.sessionsDir, earliest(sinceMs, always.size > 0))
+    scanned = deps.scan(opts.sessionsDir, earliest(sinceMs, always.size > 0))
   } catch {
     // Not having Codex, or an unreadable ~/.codex, must not take the board
     // down — the Claude Code half is entirely independent of it.
-    return { sessions: [], invalid: 0 }
+    return { sessions: [], invalid: 0, failure: `讀不到 ${opts.sessionsDir}` }
   }
+  const files = scanned.files
 
   const groups = new Map<string, { cwd: string; files: RolloutFile[] }>()
   let invalid = 0
@@ -125,7 +128,15 @@ export function discoverCodex(opts: CodexOptions, deps: CodexDeps): CodexResult 
   })
 
   deps.flush()
-  return { sessions, invalid }
+  return {
+    sessions,
+    invalid,
+    // An unreadable directory is a piece of the board missing, and the user
+    // has to be told which piece.
+    ...(scanned.unreadable.length === 0
+      ? {}
+      : { failure: `讀不到 ${scanned.unreadable.join('、')}，這些目錄底下的 session 不會出現在看板上` }),
+  }
 }
 
 function newestOf(group: readonly RolloutFile[]): RolloutFile {

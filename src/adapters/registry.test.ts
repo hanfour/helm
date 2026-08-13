@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { collectFromAdapters, type Adapter } from './registry.ts'
+import { collectFromAdapters, type Adapter, type AdapterResult } from './registry.ts'
 import type { SessionState } from '../types.ts'
 
 const state = (over: Partial<SessionState>): SessionState => ({
@@ -10,8 +10,7 @@ const state = (over: Partial<SessionState>): SessionState => ({
   lifecycleConfidence: 'high', live: null, ...over,
 })
 
-const adapter = (id: string, result: () => { sessions: SessionState[]; invalid: number }): Adapter =>
-  ({ id, collect: result })
+const adapter = (id: string, result: () => AdapterResult): Adapter => ({ id, collect: result })
 
 test('把各 adapter 的 session 合起來', () => {
   const r = collectFromAdapters([
@@ -61,4 +60,28 @@ test('全部都掛掉時回空看板加兩則說明', () => {
 test('都正常時沒有任何說明', () => {
   const r = collectFromAdapters([adapter('codex', () => ({ sessions: [], invalid: 0 }))])
   assert.deepEqual(r.failures, [])
+})
+
+test('adapter 內部把例外吞掉時，隔離機制就形同虛設', () => {
+  // registry 的整段設計理由是「the loss has to be *said*, not swallowed」，
+  // 但 discoverCodex 自己 catch 掉 scan 例外、scanRollouts 更早一層又
+  // catch 掉了。reviewer 把三個資料目錄全部 chmod 000，adapterFailures
+  // 仍是 []。沒有任何輸入能讓它說出口。
+  //
+  // 所以 adapter 要能主動回報「我少給了東西」，而不只是靠丟例外。
+  const r = collectFromAdapters([
+    adapter('codex', () => ({ sessions: [], invalid: 0, failure: '讀不到 ~/.codex/sessions' })),
+  ])
+  assert.ok(r.failures.some((f) => f.includes('codex')), r.failures.join('|'))
+  assert.ok(r.failures.some((f) => f.includes('~/.codex')), r.failures.join('|'))
+})
+
+test('回報失敗的 adapter 仍然交出它拿得到的部分', () => {
+  const r = collectFromAdapters([
+    adapter('codex', () => ({
+      sessions: [state({ adapterId: 'codex' })], invalid: 0, failure: '一半讀不到',
+    })),
+  ])
+  assert.equal(r.sessions.length, 1, '部分結果不該被丟掉')
+  assert.equal(r.failures.length, 1)
 })

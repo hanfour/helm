@@ -28,29 +28,48 @@ export interface RolloutFile {
  * so this walks whatever depth it finds rather than assuming three levels.
  */
 export function scanRollouts(sessionsDir: string, sinceMs: number): RolloutFile[] {
-  return walk(sessionsDir).flatMap((path) => {
+  return scanRolloutsDetailed(sessionsDir, sinceMs).files
+}
+
+export interface ScanResult {
+  files: RolloutFile[]
+  /** Directories that exist but could not be read. Reported, not swallowed. */
+  unreadable: string[]
+}
+
+export function scanRolloutsDetailed(sessionsDir: string, sinceMs: number): ScanResult {
+  const unreadable: string[] = []
+  const files = walk(sessionsDir, unreadable).flatMap((path) => {
     const parsed = parseRolloutName(baseName(path))
     if (parsed === null) return []
     const mtimeMs = mtimeOf(path)
     if (mtimeMs === null || mtimeMs < sinceMs) return []
     return [{ rolloutId: parsed.rolloutId, path, startedAt: parsed.startedAt, mtimeMs }]
   })
+  return { files, unreadable }
 }
 
-function walk(dir: string): string[] {
-  return entries(dir).flatMap((e) => {
+function walk(dir: string, unreadable: string[]): string[] {
+  return entries(dir, unreadable).flatMap((e) => {
     const path = join(dir, e.name)
-    return e.isDirectory() ? walk(path) : [path]
+    return e.isDirectory() ? walk(path, unreadable) : [path]
   })
 }
 
-function entries(dir: string): Dirent[] {
+/**
+ * Missing and unreadable are not the same thing.
+ *
+ * Not having Codex installed is an ordinary state and must stay silent. A
+ * directory that exists but cannot be read is a chunk of the board going
+ * missing, and the user has to hear about it — swallowing both identically
+ * is how `~/.codex` chmod 000 produced a half-empty board and a doctor
+ * reporting 「皆可讀取」.
+ */
+function entries(dir: string, unreadable: string[]): Dirent[] {
   try {
     return readdirSync(dir, { withFileTypes: true })
-  } catch {
-    // Missing or unreadable just means "no Codex sessions to report" — not
-    // having Codex installed is an ordinary state, not an error worth taking
-    // the whole board down for.
+  } catch (err) {
+    if ((err as { code?: string }).code !== 'ENOENT') unreadable.push(dir)
     return []
   }
 }

@@ -13,7 +13,7 @@ export interface PrStatus {
   checks: readonly CheckRun[]
 }
 
-export type WaitingKind = 'draft' | 'ci' | 'changes' | 'review' | 'mergeable'
+export type WaitingKind = 'draft' | 'ci' | 'changes' | 'review' | 'mergeable' | 'unknown'
 
 export interface Waiting {
   kind: WaitingKind
@@ -39,6 +39,10 @@ const BAD_CONCLUSIONS = new Set([
 ])
 
 const LABELS: Record<WaitingKind, string> = {
+  // Not a verdict — an admission. Used when `gh pr view` failed for this one
+  // pull request, where claiming 「等人審」would assert the ball is with the
+  // reviewer when it may well be with the user.
+  unknown: '狀態讀不到',
   draft: '草稿',
   ci: '等 CI',
   changes: '等你改',
@@ -69,4 +73,9 @@ export function waitingOn(pr: PrStatus): Waiting {
 function isUnfinished(check: CheckRun): boolean {
   if (check.status !== 'COMPLETED') return true
   return check.conclusion !== null && BAD_CONCLUSIONS.has(check.conclusion)
+}
+
+/** The honest answer when this pull request's state could not be fetched. */
+export function unknownWaiting(): Waiting {
+  return { kind: 'unknown', label: LABELS.unknown }
 }

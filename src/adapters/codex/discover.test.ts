@@ -18,7 +18,7 @@ const file = (over: Partial<RolloutFile> & { rolloutId: string }): RolloutFile =
 function deps(over: Partial<CodexDeps> = {}): CodexDeps {
   const metas: Record<string, RolloutMeta> = { r1: { sessionId: SID, cwd: '/p/a' } }
   return {
-    scan: () => [file({ rolloutId: 'r1' })],
+    scan: () => ({ files: [file({ rolloutId: 'r1' })], unreadable: [] }),
     meta: (f) => metas[f.rolloutId] ?? null,
     liveCwds: () => new Set<string>(),
     flush: () => {},
@@ -46,7 +46,7 @@ test('同一個 session 的多個 rollout 合併成一行', () => {
     file({ rolloutId: 'r3', startedAt: NOW - 1800_000, mtimeMs: NOW }),
   ]
   const { sessions } = run({
-    scan: () => files,
+    scan: () => ({ files, unreadable: [] }),
     meta: () => ({ sessionId: SID, cwd: '/p/a' }),
   })
   assert.equal(sessions.length, 1, '三個檔案是同一個 session')
@@ -59,7 +59,7 @@ test('同一個 session 的多個 rollout 合併成一行', () => {
 
 test('不同 session 各自成行', () => {
   const { sessions } = run({
-    scan: () => [file({ rolloutId: 'r1' }), file({ rolloutId: 'r2' })],
+    scan: () => ({ files: [file({ rolloutId: 'r1' }), file({ rolloutId: 'r2' })], unreadable: [] }),
     meta: (f) => ({ sessionId: f.rolloutId === 'r1' ? SID : OTHER, cwd: '/p/a' }),
   })
   assert.equal(sessions.length, 2)
@@ -78,7 +78,7 @@ test('pid 一律 null —— Codex 沒有 PID 註冊表', () => {
 
 test('讀不出 meta 的檔案計入 invalid，不是靜默消失', () => {
   const { sessions, invalid } = run({
-    scan: () => [file({ rolloutId: 'r1' }), file({ rolloutId: 'bad' })],
+    scan: () => ({ files: [file({ rolloutId: 'r1' }), file({ rolloutId: 'bad' })], unreadable: [] }),
     meta: (f) => (f.rolloutId === 'bad' ? null : { sessionId: SID, cwd: '/p/a' }),
   })
   assert.equal(sessions.length, 1)
@@ -93,7 +93,7 @@ test('cwd 有 codex 行程時判為 running', () => {
 
 test('沒有行程且超過 30 分鐘沒動靜時判為 crashed', () => {
   const { sessions } = run({
-    scan: () => [file({ rolloutId: 'r1', mtimeMs: NOW - 31 * 60_000 })],
+    scan: () => ({ files: [file({ rolloutId: 'r1', mtimeMs: NOW - 31 * 60_000 })], unreadable: [] }),
   })
   assert.equal(sessions[0]?.lifecycle, 'crashed')
 })
@@ -104,7 +104,7 @@ test('live 一律 null —— 那是 hook 的產物，Codex 沒有', () => {
 
 test('掃描完一定 flush 快取，即使沒有任何 session', () => {
   let flushed = 0
-  run({ scan: () => [], flush: () => { flushed++ } })
+  run({ scan: () => ({ files: [], unreadable: [] }), flush: () => { flushed++ } })
   assert.equal(flushed, 1)
 })
 
@@ -120,7 +120,7 @@ test('沒有任何 session 時不查行程 —— 省一次 spawn', () => {
   // pgrep 在沒有 codex 在跑時也要 35.7 ms，佔 200ms 契約的 18%。
   // 沒裝 Codex 的人不該付這筆錢。
   let queried = 0
-  run({ scan: () => [], liveCwds: () => { queried++; return new Set() } })
+  run({ scan: () => ({ files: [], unreadable: [] }), liveCwds: () => { queried++; return new Set() } })
   assert.equal(queried, 0)
 })
 
@@ -129,7 +129,7 @@ test('全部都是舊 session 時也不查行程', () => {
   // codex 在跑，那也是別人的行程 —— 把它標成 running 是錯的。
   let queried = 0
   run({
-    scan: () => [file({ rolloutId: 'r1', mtimeMs: NOW - 5 * 3600_000 })],
+    scan: () => ({ files: [file({ rolloutId: 'r1', mtimeMs: NOW - 5 * 3600_000 })], unreadable: [] }),
     liveCwds: () => { queried++; return new Set(['/p/a']) },
   })
   assert.equal(queried, 0)
@@ -137,7 +137,7 @@ test('全部都是舊 session 時也不查行程', () => {
 
 test('舊 session 不會因為 cwd 現在有 codex 就被說成 running', () => {
   const { sessions } = run({
-    scan: () => [file({ rolloutId: 'r1', mtimeMs: NOW - 5 * 3600_000 })],
+    scan: () => ({ files: [file({ rolloutId: 'r1', mtimeMs: NOW - 5 * 3600_000 })], unreadable: [] }),
     liveCwds: () => new Set(['/p/a']),
   })
   assert.equal(sessions[0]?.lifecycle, 'crashed', '五小時前的活動不會因為現在有行程就變成執行中')
@@ -146,9 +146,26 @@ test('舊 session 不會因為 cwd 現在有 codex 就被說成 running', () => 
 test('有最近活動的 session 時才查行程', () => {
   let queried = 0
   const { sessions } = run({
-    scan: () => [file({ rolloutId: 'r1', mtimeMs: NOW - 60_000 })],
+    scan: () => ({ files: [file({ rolloutId: 'r1', mtimeMs: NOW - 60_000 })], unreadable: [] }),
     liveCwds: () => { queried++; return new Set(['/p/a']) },
   })
   assert.equal(queried, 1)
   assert.equal(sessions[0]?.lifecycle, 'running')
+})
+
+test('目錄讀不到時說出是哪一個 —— 靜靜少半個看板是最糟的失敗', () => {
+  const r = run({ scan: () => ({ files: [], unreadable: ['/s/2026/08'] }) })
+  assert.match(r.failure ?? '', /\/s\/2026\/08/)
+})
+
+test('讀得到的部分照常交出來，同時說出讀不到的那些', () => {
+  const r = run({
+    scan: () => ({ files: [file({ rolloutId: 'r1' })], unreadable: ['/s/locked'] }),
+  })
+  assert.equal(r.sessions.length, 1)
+  assert.match(r.failure ?? '', /locked/)
+})
+
+test('沒有讀不到的目錄時不帶 failure', () => {
+  assert.equal(run().failure, undefined)
 })

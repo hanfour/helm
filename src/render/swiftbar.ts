@@ -71,14 +71,14 @@ function renderBody(board: Board, opts: MenuOptions): string[] {
   // window, and the board empties out; "no matching projects" would then be
   // the only thing the user is told about a machine where something broke.
   const warnings = renderWarnings(board, opts)
-  if (board.projects.length === 0) {
-    return [`沒有符合條件的專案（近 ${ACTIVITY_WINDOW_DAYS} 天內有活動且是 git repo）`, ...warnings]
-  }
-  return [
-    ...board.projects.flatMap((p) => renderProject(p, opts)),
-    ...renderPrs(board, opts),
-    ...warnings,
-  ]
+  // The empty-board branch used to return early past `renderPrs`, so a user
+  // back from holiday saw nothing at all in the menu bar while the desktop
+  // widget showed their pull requests and a 「gh 尚未登入」notice. Same board,
+  // two answers — which is worse than either being incomplete.
+  const rows = board.projects.length === 0
+    ? [`沒有符合條件的專案（近 ${ACTIVITY_WINDOW_DAYS} 天內有活動且是 git repo）`]
+    : board.projects.flatMap((p) => renderProject(p, opts))
+  return [...rows, ...renderPrs(board, opts), ...warnings]
 }
 
 /** Degradation must be visible here too, not only in the terminal view. */
