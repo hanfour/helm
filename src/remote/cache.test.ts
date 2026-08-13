@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readPrCache, shouldRefresh, writePrCache, type PrCache } from './cache.ts'
 import { tempDir } from '../temp-dir.ts'
@@ -98,4 +98,27 @@ test('只壞一個欄位的快取也要拒絕 —— 否則會丟 TypeError 炸�
     assert.doesNotThrow(() => readPrCache(f), junk)
     assert.equal(readPrCache(f), null, junk)
   }
+})
+
+test('寫不進去時要說出來 —— 否則會變成無上限的 gh 迴圈', () => {
+  // 降級訊息的節流本身就靠這次寫入。寫不進去 → shouldRefresh 永遠為真
+  // → 每 5 秒 spawn 一次完整 sweep。實測每分鐘 12 次，而 GitHub search
+  // 的額度是每分鐘 30 次，加上每個 PR 一次 pr view，三個 PR 就是
+  // 48 calls/min 持續打 —— 使用者其他所有 gh 用途一起被鎖。
+  const dir = tempDir('helm-pr-')
+  const f = join(dir, 'sub', 'prs.json')
+  mkdirSync(join(dir, 'sub'))
+  writeFileSync(f, '')
+  chmodSync(f, 0o400)
+  chmodSync(join(dir, 'sub'), 0o500)
+  try {
+    assert.equal(writePrCache(f, cache()), false, '寫失敗要回報，不是靜靜吞掉')
+  } finally {
+    chmodSync(join(dir, 'sub'), 0o700)
+    chmodSync(f, 0o600)
+  }
+})
+
+test('寫成功時回 true', () => {
+  assert.equal(writePrCache(file(), cache()), true)
 })

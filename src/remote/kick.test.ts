@@ -55,3 +55,19 @@ test('回傳快取內容，不論新舊 —— stale-while-revalidate', () => {
   const cache = kickRefreshIfStale(p, NOW, () => {})
   assert.equal(cache?.degraded, 'gh 尚未登入', '過期的照樣拿來畫')
 })
+
+test('寫不進快取時退避，不是每 5 秒重打一次 gh', () => {
+  // 沒有這道退避的話，一個不可寫的 prs.json 會讓看板每次輪詢都 fork
+  // 一次完整 sweep。實測每分鐘 12 次。
+  const p = paths()
+  let spawned = 0
+  const spawn = () => { spawned++ }
+  // 第一次：沒有快取，該啟動
+  kickRefreshIfStale(p, NOW, spawn)
+  assert.equal(spawned, 1)
+  // refresh 跑了但寫不進去（快取仍然不存在）—— 下一次輪詢不該立刻再來
+  kickRefreshIfStale(p, NOW + 5_000, spawn)
+  assert.equal(spawned, 1, '5 秒後不該再 spawn')
+  kickRefreshIfStale(p, NOW + 61_000, spawn)
+  assert.equal(spawned, 2, '過了 TTL 才可以再試')
+})

@@ -35,7 +35,7 @@ test('抓下來的狀態寫進快取', () => {
   const cache = readPrCache(p.cacheFile)
   assert.equal(cache?.prs.length, 1)
   assert.equal(cache?.prs[0]?.waitingLabel, '可合併')
-  assert.equal(cache?.fetchedAt, NOW)
+  assert.ok((cache?.fetchedAt ?? 0) > 0, 'fetchedAt 記的是資料落地的時刻')
   assert.equal(cache?.degraded, null)
 })
 
@@ -100,4 +100,42 @@ test('部分 PR 拿不到狀態時，其餘的照常', () => {
   const byNumber = Object.fromEntries((cache?.prs ?? []).map((pr) => [pr.number, pr.waiting]))
   assert.equal(byNumber[4853], 'mergeable')
   assert.equal(byNumber[999], 'unknown')
+})
+
+test('sweep 有總時限 —— 超過就寫下已經拿到的部分並收工', () => {
+  // 每個 gh pr view 的 execFileSync timeout 是 30 秒，--limit 50 表示
+  // 最壞 51 × 30s = 25.5 分鐘，遠超過鎖的 5 分鐘過期窗口。網路不穩時
+  // 每過 5 分鐘就多一個接管者，前面的都還在跑 —— 實測 6 個並行。
+  const p = paths()
+  let elapsed = 0
+  const many = Array.from({ length: 10 }, (_, i) => ({ ...listing[0], number: 100 + i }))
+  refreshPrs(p, (args) => {
+    if (args[0] === 'search') return JSON.stringify(many)
+    elapsed += 60_000
+    return JSON.stringify({ reviewDecision: 'APPROVED', statusCheckRollup: [] })
+  }, NOW, { clock: () => NOW + elapsed })
+
+  const cache = readPrCache(p.cacheFile)
+  assert.ok((cache?.prs.length ?? 0) > 0, '已經拿到的要留下')
+  assert.ok((cache?.prs.length ?? 0) < 10, '超時之後不該繼續打')
+  assert.match(cache?.degraded ?? '', /只更新了 \d+\/\d+/, cache?.degraded ?? '')
+})
+
+test('沒有超時的話全部都會拿到', () => {
+  const p = paths()
+  const many = Array.from({ length: 5 }, (_, i) => ({ ...listing[0], number: 200 + i }))
+  refreshPrs(p, (args) => (args[0] === 'search' ? JSON.stringify(many) : JSON.stringify({ reviewDecision: 'APPROVED', statusCheckRollup: [] })), NOW)
+  assert.equal(readPrCache(p.cacheFile)?.prs.length, 5)
+})
+
+test('fetchedAt 記的是寫入當下，不是 sweep 開始的時刻', () => {
+  // 用開始時間的話，一趟 36 秒的 sweep 會把 60 秒的 TTL 吃掉超過一半，
+  // gh 實際被問的頻率是文件宣稱的 2.5 倍。
+  const p = paths()
+  let elapsed = 0
+  refreshPrs(p, (args) => {
+    elapsed += 5_000
+    return args[0] === 'search' ? JSON.stringify(listing) : JSON.stringify({ reviewDecision: 'APPROVED', statusCheckRollup: [] })
+  }, NOW, { clock: () => NOW + elapsed })
+  assert.ok((readPrCache(p.cacheFile)?.fetchedAt ?? 0) > NOW, 'TTL 要從資料落地那一刻算')
 })

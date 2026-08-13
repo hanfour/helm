@@ -62,7 +62,8 @@ export function readPrCache(file: string): PrCache | null {
   }
 }
 
-export function writePrCache(file: string, cache: PrCache): void {
+/** Returns whether it landed. A silent failure here becomes a `gh` loop. */
+export function writePrCache(file: string, cache: PrCache): boolean {
   mkdirSync(dirname(file), { recursive: true })
   const temp = `${file}.${process.pid}.tmp`
   try {
@@ -70,10 +71,13 @@ export function writePrCache(file: string, cache: PrCache): void {
     // repository names and PR titles, and ~/.helm is world-readable.
     writeFileSync(temp, `${JSON.stringify(cache)}\n`, { encoding: 'utf8', mode: 0o600 })
     renameSync(temp, file)
+    return true
   } catch {
     // Losing the cache costs one extra `gh` call. Taking the board down over
-    // it would be a far worse trade.
+    // it would be a far worse trade — but the caller has to know, because the
+    // TTL that stops helm asking `gh` every five seconds lives in this file.
     rmSync(temp, { force: true })
+    return false
   }
 }
 
