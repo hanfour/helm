@@ -154,11 +154,14 @@ test('桌面與選單列對同一份資料給同一個數字', () => {
   // 這兩支檔案各有一份計數邏輯，而畫面上只有數字 —— 單位一旦分岔，
   // 使用者無從得知兩邊在數不同的東西。舊註解防的就是這件事，但它靠的是
   // 兩處註解互相提醒；這條測試讓分岔直接變紅。
-  const mk = (nativeStatus: string, lifecycle: string) => ({
-    adapterId: 'claude-code', sessionId: 'x', cwd: '/p/a', pid: null, procStart: null,
+  // 信心必須是變數。第一版把它寫死成 'high'，於是低信心那條分支一次都
+  // 沒走到 —— widget 的計數整個沒改，這條測試照樣綠。
+  const mk = (nativeStatus: string, lifecycle: string, lifecycleConfidence = 'high') => ({
+    adapterId: lifecycleConfidence === 'low' ? 'codex' : 'claude-code',
+    sessionId: 'x', cwd: '/p/a', pid: null, procStart: null,
     startedAt: NOW, updatedAt: NOW, nativeStatus, kind: 'interactive', name: '',
     transcriptPath: null, transcriptMtimeMs: null, lifecycle,
-    lifecycleConfidence: 'high', live: null,
+    lifecycleConfidence, live: null,
   })
   const cases: Record<string, unknown>[][] = [
     [{ aggregateStatus: 'busy', sessions: [mk('busy', 'running'), mk('busy', 'running')] }],
@@ -169,6 +172,18 @@ test('桌面與選單列對同一份資料給同一個數字', () => {
       { aggregateStatus: 'busy', sessions: [mk('busy', 'running')] },
     ],
     [{ aggregateStatus: null, sessions: [mk('idle', 'ended_clean')] }],
+    // 低信心的每一種狀態，以及高低混合 —— 回報的那個 bug 就在這幾格裡。
+    [{ aggregateStatus: 'crashed', sessions: [mk('idle', 'crashed', 'low')] }],
+    [{ aggregateStatus: 'busy', sessions: [mk('busy', 'running', 'low')] }],
+    [{ aggregateStatus: 'idle', sessions: [mk('idle', 'running', 'low')] }],
+    [{
+      aggregateStatus: 'crashed',
+      sessions: [mk('idle', 'crashed'), mk('idle', 'crashed', 'low')],
+    }],
+    [
+      { aggregateStatus: 'crashed', sessions: [mk('idle', 'crashed', 'low')] },
+      { aggregateStatus: 'busy', sessions: [mk('busy', 'running')] },
+    ],
   ]
   for (const projects of cases) {
     const full = projects.map((p) => proj(p))
@@ -182,6 +197,26 @@ test('桌面與選單列對同一份資料給同一個數字', () => {
     assert.equal(menuWord === '' ? '都閒著' : menuWord, desktop,
       `兩邊不一致：選單列 ${JSON.stringify(menu)}、桌面 ${JSON.stringify(desktop)}`)
   }
+})
+
+test('桌面也把猜出來的中斷降色 —— 紅色留給驗證過的', () => {
+  // 交叉比對那條只比文字，顏色是兩邊各自的表示法（SwiftBar 用 color=red，
+  // 桌面用十六進位），比不了 —— 所以顏色要在這裡各自守住。少了這條，
+  // 桌面可以把一個猜測畫成鮮紅色而整套測試照樣綠。
+  const DOT = evalFn(widget(), 'DOT') as unknown as Record<string, string>
+  const titleOf = evalFn(widget(), 'titleOf') as unknown as
+    (p: unknown[]) => { word: string; color: string }
+  const mk = (lifecycleConfidence: string) => ({
+    nativeStatus: 'idle', lifecycle: 'crashed', lifecycleConfidence,
+  })
+  const guessed = titleOf([{ sessions: [mk('low')] }])
+  const verified = titleOf([{ sessions: [mk('high')] }])
+  const mixed = titleOf([{ sessions: [mk('low'), mk('high')] }])
+
+  assert.equal(verified.color, DOT['crashed'], '驗證過的中斷要是紅的')
+  assert.equal(mixed.color, DOT['crashed'], '混合時有一個驗證過的就值得紅色')
+  assert.equal(guessed.color, DOT['guessedCrash'], '全是猜的不該用紅色')
+  assert.notEqual(guessed.color, verified.color, '猜測與確定必須看得出差別')
 })
 
 test('標題只數真的在跑的，而且中斷優先', () => {

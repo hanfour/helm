@@ -61,14 +61,40 @@ export function renderSwiftBar(board: Board, opts: MenuOptions): string {
  * user counts is terminals, and one terminal is one session.
  */
 function renderTitle(projects: readonly ProjectView[]): string {
-  const keys = projects.flatMap((p) => p.sessions.map(statusOf))
+  const sessions = projects.flatMap((p) => p.sessions)
   for (const key of ['crashed', 'busy', 'idle'] as const) {
-    const n = keys.filter((k) => k === key).length
-    if (n === 0) continue
-    const { word, color } = TITLE[key]
-    return `⚓ ${n} ${word}${color === '' ? '' : ` | color=${color}`}`
+    const matched = sessions.filter((s) => statusOf(s) === key)
+    if (matched.length === 0) continue
+    const { word } = TITLE[key]
+    const color = titleColor(key, matched)
+    // Same `?` the dot carries one level down, for the same reason: the
+    // roll-up must not launder a guess into a fact. Codex verdicts are always
+    // low confidence (`decideCodexLifecycle`), so without this the title
+    // states as certain the one thing helm inferred rather than read.
+    return `⚓ ${matched.length} ${word}${isGuess(matched) ? '?' : ''}`
+      + (color === '' ? '' : ` | color=${color}`)
   }
   return '⚓'
+}
+
+function isGuess(sessions: readonly SessionState[]): boolean {
+  return sessions.some((s) => s.lifecycleConfidence === 'low')
+}
+
+/**
+ * Red is reserved for a crash helm actually verified.
+ *
+ * Reported 2026-08-13: the menu bar went red with 「1 中斷」, the user went
+ * looking and found nothing — it was a Codex session idle for 44 minutes,
+ * which `decideCodexLifecycle` calls crashed on a 30-minute timer and always
+ * at low confidence. `lifecycle.ts` already says twelve false red dots would
+ * bury a real one; this is that, in the one place the whole screen shows.
+ *
+ * One verified crash still earns red even when guesses sit beside it.
+ */
+function titleColor(key: Exclude<StatusKey, 'ended'>, matched: readonly SessionState[]): string {
+  if (key !== 'crashed') return TITLE[key].color
+  return matched.some((s) => s.lifecycleConfidence !== 'low') ? 'red' : 'orange'
 }
 
 function renderBody(board: Board, opts: MenuOptions): string[] {
@@ -140,7 +166,11 @@ function renderWarnings(board: Board, opts: MenuOptions): string[] {
 }
 
 function renderProject(p: ProjectView, opts: MenuOptions): string[] {
-  const color = p.aggregateStatus === 'crashed' ? ' | color=red' : ''
+  // Same split as the title: a project the user is actively working in must
+  // not go red because one Codex session in it passed a 30-minute timer.
+  const color = p.aggregateStatus === 'crashed'
+    ? ` | color=${titleColor('crashed', p.sessions.filter((s) => statusOf(s) === 'crashed'))}`
+    : ''
   const name = label(p.name)
   return [
     `${p.pinned ? '📌 ' : ''}${name}  ${relativeTime(p.lastActivityMs, opts.nowMs)}${color}`,

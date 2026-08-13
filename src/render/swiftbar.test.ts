@@ -331,6 +331,78 @@ test('clean 同時處理管線字元與換行', () => {
   assert.match(out, /^a bc {2}/m)
 })
 
+test('全是低信心的中斷：標題帶 ? 且降成橘色，紅色留給確定的', () => {
+  // 回報 2026-08-13：標題亮紅字「1 中斷」，使用者去找卻找不到任何斷掉的
+  // 東西 —— 那是一個閒置 44 分鐘的 Codex session。decideCodexLifecycle 的
+  // 註解自己寫著「Confidence is always low … The UI has to show that
+  // difference」，下拉那一列有做到（●?），標題沒有。
+  const out = renderSwiftBar(board([proj({
+    aggregateStatus: 'crashed',
+    sessions: [sess({ adapterId: 'codex', lifecycle: 'crashed', lifecycleConfidence: 'low' })],
+  })]), OPTS)
+  assert.match(title(out), /⚓ 1 中斷\?/, title(out))
+  assert.match(title(out), /color=orange/, title(out))
+})
+
+test('有高信心的中斷就是紅的 —— 註冊表背書的中斷不該被降級', () => {
+  const out = renderSwiftBar(board([proj({
+    aggregateStatus: 'crashed',
+    sessions: [sess({ lifecycle: 'crashed', lifecycleConfidence: 'high' })],
+  })]), OPTS)
+  assert.match(title(out), /⚓ 1 中斷 /, title(out))
+  assert.doesNotMatch(title(out), /\?/, `全高信心不該帶問號：${title(out)}`)
+  assert.match(title(out), /color=red/, title(out))
+})
+
+test('高低信心混在一起：數字全算、帶 ?、但顏色是紅的', () => {
+  // 有一個確定斷掉就值得紅色；有一個是猜的就值得問號。兩件事互不抵銷。
+  const out = renderSwiftBar(board([proj({
+    aggregateStatus: 'crashed',
+    sessions: [
+      sess({ lifecycle: 'crashed', lifecycleConfidence: 'high' }),
+      sess({ sessionId: 'bbbbbbbb-3456-7890-abcd-ef1234567890', adapterId: 'codex', lifecycle: 'crashed', lifecycleConfidence: 'low' }),
+    ],
+  })]), OPTS)
+  assert.match(title(out), /⚓ 2 中斷\?/, title(out))
+  assert.match(title(out), /color=red/, title(out))
+})
+
+test('在跑與等輸入同樣帶 ? —— Codex 的信心永遠是低的', () => {
+  const busy = renderSwiftBar(board([proj({
+    aggregateStatus: 'busy',
+    sessions: [sess({ adapterId: 'codex', nativeStatus: 'busy', lifecycleConfidence: 'low' })],
+  })]), OPTS)
+  assert.match(title(busy), /⚓ 1 在跑\?/, title(busy))
+  const idle = renderSwiftBar(board([proj({
+    aggregateStatus: 'idle',
+    sessions: [sess({ adapterId: 'codex', nativeStatus: 'idle', lifecycleConfidence: 'low' })],
+  })]), OPTS)
+  assert.match(title(idle), /⚓ 1 等輸入\?/, title(idle))
+})
+
+test('全高信心時標題不帶問號 —— 問號要是有意義的', () => {
+  const out = renderSwiftBar(board([proj({
+    aggregateStatus: 'busy', sessions: [sess({ nativeStatus: 'busy' })],
+  })]), OPTS)
+  assert.doesNotMatch(title(out), /\?/, title(out))
+})
+
+test('專案列同樣分紅橘 —— 一個猜測不該把你正在用的專案染紅', () => {
+  // super-dsp-2.0 底下有兩個 claude-code session 在用，卻被一個閒置 44 分鐘
+  // 的 Codex 判定染成紅色。lifecycle.ts 自己寫著「Twelve false red dots
+  // would bury a real one」。
+  const guessed = renderSwiftBar(board([proj({
+    name: 'guessed', aggregateStatus: 'crashed',
+    sessions: [sess({ adapterId: 'codex', lifecycle: 'crashed', lifecycleConfidence: 'low' })],
+  })]), OPTS)
+  const known = renderSwiftBar(board([proj({
+    name: 'known', aggregateStatus: 'crashed',
+    sessions: [sess({ lifecycle: 'crashed', lifecycleConfidence: 'high' })],
+  })]), OPTS)
+  assert.match(body(guessed).split('\n').find((l) => l.startsWith('guessed')) ?? '', /color=orange/)
+  assert.match(body(known).split('\n').find((l) => l.startsWith('known')) ?? '', /color=red/)
+})
+
 test('標題數的是在跑的 session，跟桌面 widget 同一個單位', () => {
   // 兩邊看的是同一份資料，單位必須一致 —— 曾經選單列數 session、widget
   // 數專案，同一時刻一邊寫「3 在跑」一邊寫「1 在跑」，畫面上只有數字，

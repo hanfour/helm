@@ -66,6 +66,9 @@ const DOT = {
   busy: '#4ade80',
   crashed: '#f87171',
   idle: 'rgba(255, 255, 255, 0.55)',
+  // 只有 helm 真的驗證過的中斷配得上紅色。Codex 的判定永遠是低信心
+  // （decideCodexLifecycle），而它會在閒置 30 分鐘後把 session 叫做 crashed。
+  guessedCrash: '#fb923c',
 }
 
 function dotOf(status) {
@@ -86,18 +89,26 @@ function statusOf(s) {
 //
 // 數過專案，那是錯的一邊：使用者在同一個 repo 開兩個 terminal 時，
 // 兩邊都寫「1 在跑」。專案是從 session 的 cwd 長出來的，不是使用者開的東西。
+// 選單列的問號在這裡也要有：把猜測捲進總數時，捲出來的不能變成事實。
+// （這段在 template literal 裡，註解不能用反引號 —— 會把字串提前結束。）
 function titleOf(projects) {
-  const keys = []
+  const sessions = []
   for (const p of projects) {
-    for (const s of p.sessions || []) keys.push(statusOf(s))
+    for (const s of p.sessions || []) sessions.push(s)
   }
-  const count = (k) => keys.filter((x) => x === k).length
-  const crashed = count('crashed')
-  if (crashed > 0) return { word: crashed + ' 中斷', color: DOT.crashed }
-  const busy = count('busy')
-  if (busy > 0) return { word: busy + ' 在跑', color: DOT.busy }
-  const idle = count('idle')
-  if (idle > 0) return { word: idle + ' 等輸入', color: DOT.idle }
+  const pick = (k) => sessions.filter((s) => statusOf(s) === k)
+  const say = (list, word, color) =>
+    ({ word: list.length + ' ' + word + (list.some((s) => s.lifecycleConfidence === 'low') ? '?' : ''), color })
+  const crashed = pick('crashed')
+  if (crashed.length > 0) {
+    // 一個驗證過的中斷仍然值得紅色，即使旁邊躺著幾個猜測。
+    const verified = crashed.some((s) => s.lifecycleConfidence !== 'low')
+    return say(crashed, '中斷', verified ? DOT.crashed : DOT.guessedCrash)
+  }
+  const busy = pick('busy')
+  if (busy.length > 0) return say(busy, '在跑', DOT.busy)
+  const idle = pick('idle')
+  if (idle.length > 0) return say(idle, '等輸入', DOT.idle)
   return { word: '都閒著', color: DOT.idle }
 }
 
