@@ -428,6 +428,74 @@ test('PR 的 href 也要引號 —— 那是唯一沒過 param() 的不可信值
   assert.match(params, /^href="[^"]*"$/, `注入成功了：${params}`)
 })
 
+test('PR 區前面有分隔線 —— 否則它會黏在最後一個專案下面', () => {
+  const lines = renderSwiftBar(board([proj({})], {
+    prs: [{
+      repo: 'a/b', number: 1, title: 't', url: 'https://gh/a/b/pull/1',
+      isDraft: false, updatedAt: '', waiting: 'review', waitingLabel: '等人審',
+    }],
+  }), OPTS).split('\n')
+  const i = lines.indexOf('PR')
+  assert.ok(i > 0, `找不到 PR 區標題：${lines.join('\n')}`)
+  assert.equal(lines[i - 1], '---', `PR 區前面不是分隔線：${JSON.stringify(lines[i - 1])}`)
+})
+
+test('六種 waitingOn 狀態並存時，每個 PR 各自帶自己的那一句', () => {
+  // 這台機器上只有一個開啟中的 PR，所以混合狀態的畫面從沒被真實資料走過。
+  // waiting.ts 產得出六種 kind，而渲染測試只見過 review 與 changes 兩種。
+  const kinds = [
+    ['draft', '草稿'], ['ci', '等 CI'], ['changes', '等你改'],
+    ['review', '等人審'], ['mergeable', '可合併'], ['unknown', '狀態讀不到'],
+  ] as const
+  const out = body(renderSwiftBar(board([proj({})], {
+    prs: kinds.map(([waiting, waitingLabel], i) => ({
+      repo: `o/r${i}`, number: i + 1, title: `t${i}`,
+      url: `https://gh/o/r${i}/pull/${i + 1}`,
+      isDraft: waiting === 'draft', updatedAt: '', waiting, waitingLabel,
+    })),
+  }), OPTS))
+  for (const [i, [, waitingLabel]] of kinds.entries()) {
+    assert.match(out, new RegExp(`^--o/r${i}#${i + 1} {2}${waitingLabel} {2}t${i} \\|`, 'm'),
+      `o/r${i} 這一列不見了或標籤配錯：${out}`)
+  }
+})
+
+test('PR 標題裡的管線字元與控制字元同樣要清掉', () => {
+  // PR 標題是自由文字，`fix: 處理 a|b 的解析` 是再普通不過的標題 —— 比那條
+  // 已經有測試的 url 注入好走得多。repo 與 waitingLabel 走的是同一條字串路徑，
+  // 而 cache.ts 的 toCachedPr 對這三個欄位只檢查「是不是字串」。
+  const CR = String.fromCharCode(13)
+  const out = renderSwiftBar(board([proj({})], {
+    prs: [{
+      repo: `o|r${CR}x`, number: 1, title: 'fix: 處理 a|b 的解析',
+      url: 'https://gh/o/r/pull/1', isDraft: false, updatedAt: '',
+      waiting: 'review', waitingLabel: '等|人審',
+    }],
+  }), OPTS)
+  assert.ok(!out.includes(CR), '輸出仍含 CR，一個 CR 就能偽造一整列選單')
+  for (const line of body(out).split('\n').filter((l) => l !== '' && l !== '---')) {
+    assert.ok((line.match(/\|/g) ?? []).length <= 1, `這一列有多個管線字元：${line}`)
+  }
+})
+
+test('部分資料的降級訊息不能把手上的 PR 一起吃掉', () => {
+  // refresh.ts 有兩條路徑會同時寫出「有 PR」與「有 degraded 訊息」：
+  // `gh search` 打到 --limit 50（listing.truncated），以及 sweep 超過四分鐘
+  // 預算（「只更新了 N/M 個」）。兩者說的都是「資料是部分的」，不是「沒有
+  // 資料」。renderPrs 的 early return 把兩者當成後者 —— 畫面會寫著
+  // 「只更新了 12/50 個」，然後那 12 個一個都看不到。
+  const out = renderSwiftBar(board([proj({})], {
+    prs: [
+      { repo: 'a/b', number: 1, title: 'feat: x', url: 'https://gh/a/b/pull/1', isDraft: false, updatedAt: '', waiting: 'changes', waitingLabel: '等你改' },
+      { repo: 'a/c', number: 2, title: 'fix: y', url: 'https://gh/a/c/pull/2', isDraft: false, updatedAt: '', waiting: 'ci', waitingLabel: '等 CI' },
+    ],
+    prDegraded: 'PR 太多，這次只更新了 2/50 個，其餘下次補上。',
+  }), OPTS)
+  assert.match(body(out), /a\/b#1/, '有 PR 卻一個都沒畫出來')
+  assert.match(body(out), /a\/c#2/)
+  assert.match(body(out), /只更新了 2\/50 個/, '降級訊息也要留著')
+})
+
 test('低信心的「已結束」不能講得像確定的 —— helm 其實不知道', () => {
   // lifecycle.ts 借用 ended_clean 表示「helm 停止猜測」，理由是它在 UI 上
   // 的效果是「不畫點」。但那只描述了三個呈現面裡的一個：選單列、

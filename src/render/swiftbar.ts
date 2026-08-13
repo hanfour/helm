@@ -92,10 +92,15 @@ function renderBody(board: Board, opts: MenuOptions): string[] {
  * waiting on me", which was never a per-project question anyway.
  */
 function renderPrs(board: Board, opts: MenuOptions): string[] {
-  if (board.prDegraded !== null) {
-    return ['---', `⚠ ${clean(board.prDegraded)} | color=orange`]
-  }
-  if (board.prs.length === 0) return []
+  // Kept out of the early return below: two of the three messages `refresh.ts`
+  // writes here — `listing.truncated` and the sweep's own「只更新了 N/M 個」—
+  // mean "this list is partial", not "there is no list", and they arrive
+  // *alongside* the pull requests they are counting. Returning early on them
+  // printed「只更新了 12/50 個」and then drew none of the twelve.
+  const warning = board.prDegraded === null
+    ? []
+    : [`⚠ ${clean(board.prDegraded)} | color=orange`]
+  if (board.prs.length === 0) return warning.length === 0 ? [] : ['---', ...warning]
   return [
     '---',
     'PR',
@@ -105,6 +110,9 @@ function renderPrs(board: Board, opts: MenuOptions): string[] {
       // region: `clean()` strips `|` and control characters but keeps spaces,
       // and everything after `|` is split on whitespace into key=value pairs.
       + ` | href=${param(pr.url)}`),
+    // After the list, not before: it is a footnote about the list's
+    // completeness, and top-level so it is visible without opening the submenu.
+    ...warning,
   ]
 }
 
