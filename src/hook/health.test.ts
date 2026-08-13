@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolvePaths } from '../paths.ts'
-import { runChecks, sweepStaleLive, type Check } from './health.ts'
+import { APP_PROCESS_PATTERNS, runChecks, sweepStaleLive, type Check } from './health.ts'
 import type { CheckDeps } from './health.ts'
 import type { Board } from '../board.ts'
 import type { SessionState } from '../types.ts'
@@ -562,4 +562,59 @@ test('解析失敗的來源要說對 —— Codex 的錯不能算在 ~/.claude �
   const c = find(checksOf(home(), board([], { invalid: 1 })), '解析')
   assert.equal(c?.ok, false)
   assert.match(c?.detail ?? '', /codex|來源/i, c?.detail)
+})
+
+test('SwiftBar 沒在跑時檢查不通過 —— 檔案齊全但選單列是空的', () => {
+  // swiftbar() 的註解說它要防的是「plugin installed, executable, and the menu
+  // bar still empty」。app 沒在跑會造成一模一樣的結果，而 doctor 全綠。
+  const h = home()
+  const dir = join(h, 'SwiftBar')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'helm.5s.sh'), `#!/bin/sh\n# HELM_LIVE_MARKER\n`, { mode: 0o755 })
+  const c = find(checksOf(h, board(), { swiftbarRunning: false }), 'SwiftBar')
+  assert.equal(c?.ok, false, JSON.stringify(c))
+  assert.match(c?.detail ?? '', /沒在跑|未啟動/, c?.detail)
+})
+
+test('Übersicht 沒在跑時同理', () => {
+  const h = home()
+  const dir = join(h, 'Library', 'Application Support', 'Übersicht', 'widgets')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'helm.jsx'), `// HELM_LIVE_MARKER\n`)
+  const c = find(checksOf(h, board(), { ubersichtRunning: false }), 'Übersicht')
+  assert.equal(c?.ok, false, JSON.stringify(c))
+  assert.match(c?.detail ?? '', /沒在跑|未啟動/, c?.detail)
+})
+
+test('在跑的時候不因此扣分', () => {
+  const h = home()
+  const dir = join(h, 'SwiftBar')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'helm.5s.sh'), `#!/bin/sh\n# HELM_LIVE_MARKER\n`, { mode: 0o755 })
+  const c = find(checksOf(h, board(), { swiftbarRunning: true }), 'SwiftBar')
+  assert.equal(c?.ok, true, JSON.stringify(c))
+})
+
+test('沒裝的時候講的是沒裝，不是沒在跑', () => {
+  // 一個沒裝的 app 當然沒在跑。先講「沒在跑、去啟動它」會把人送錯方向。
+  const c = find(checksOf(home(), board(), {
+    swiftbarInstalled: false, swiftbarRunning: false,
+  }), 'SwiftBar')
+  assert.equal(c?.ok, false)
+  assert.match(c?.detail ?? '', /未安裝/, c?.detail)
+  assert.doesNotMatch(c?.detail ?? '', /沒在跑/, c?.detail)
+})
+
+test('丟給 pgrep 的樣式必須是純 ASCII —— 行程名是 NFD，字面值是 NFC', () => {
+  // 實測 2026-08-13：Übersicht 正在跑（pid 69123），而 `pgrep -x Übersicht`
+  // 找不到它。行程名從檔案系統來是 NFD（55 cc 88 = U + U+0308），JS 字面值
+  // 是 NFC（c3 9c = U+00DC），兩者永遠比不相等。所以樣式裡不能有非 ASCII。
+  //
+  // 這條測試存在是因為 runChecks 在測試裡注入 *Running，預設路徑一次都不會
+  // 跑到 —— 有人把 'bersicht' 改回 'Übersicht'，其他測試全都不會紅。
+  for (const [app, pattern] of Object.entries(APP_PROCESS_PATTERNS)) {
+    assert.match(pattern, /^[\x20-\x7e]+$/, `${app} 的樣式含非 ASCII：${JSON.stringify(pattern)}`)
+    assert.equal(pattern, pattern.normalize('NFD'), `${app} 的樣式在 NFD 下會變形`)
+    assert.match(pattern, /\.app\/Contents\/MacOS$/, `${app} 要比對執行檔路徑而非行程名`)
+  }
 })

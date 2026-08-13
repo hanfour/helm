@@ -1,6 +1,7 @@
 import {
   accessSync, constants, existsSync, readFileSync, readdirSync, rmSync, statSync,
 } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import type { Board } from '../board.ts'
 import type { HelmPaths } from '../paths.ts'
@@ -43,7 +44,48 @@ export interface CheckDeps {
   ubersicht?: UbersichtDeps
   swiftbarInstalled?: boolean
   ubersichtInstalled?: boolean
+  /** Injected for the same reason `*Installed` is — see above. */
+  swiftbarRunning?: boolean
+  ubersichtRunning?: boolean
 }
+
+/**
+ * Whether the app is running, matched on its executable path rather than its
+ * process name.
+ *
+ * `pgrep -x Übersicht` finds nothing while Übersicht is running: the process
+ * name comes off the filesystem in NFD (`U` + U+0308) and a JS string literal
+ * is NFC (U+00DC), so the two never compare equal. Matching a path fragment
+ * that starts after the accented character sidesteps normalisation entirely,
+ * and the `.app/Contents/MacOS` suffix is stable across /Applications,
+ * ~/Applications and Setapp installs — the same reason `appInstalled` stopped
+ * checking a hard-coded path.
+ *
+ * `pgrep` is in the bare PATH SwiftBar's launchd environment provides, so this
+ * costs nothing that `helm doctor` was not already able to do.
+ */
+function appRunning(pattern: string): boolean {
+  try {
+    execFileSync('pgrep', ['-f', pattern], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 3000,
+    })
+    return true
+  } catch {
+    // `pgrep` exits 1 when nothing matches, which is the answer, not an error.
+    return false
+  }
+}
+
+/**
+ * The patterns handed to `pgrep -f`, deliberately free of any non-ASCII
+ * character — `Übersicht` is truncated to `bersicht` for exactly that reason.
+ * `runChecks` injects the result in tests, so nothing else would notice if
+ * somebody "fixed" the spelling; `health.test.ts` asserts the ASCII property.
+ */
+export const APP_PROCESS_PATTERNS = {
+  swiftbar: 'SwiftBar.app/Contents/MacOS',
+  ubersicht: 'bersicht.app/Contents/MacOS',
+} as const
 
 export function runChecks(paths: HelmPaths, board: Board, deps: CheckDeps = {}): Check[] {
   return [
@@ -58,10 +100,12 @@ export function runChecks(paths: HelmPaths, board: Board, deps: CheckDeps = {}):
     swiftbar(
       paths, deps.swiftbar ?? defaultSwiftBarDeps(),
       deps.swiftbarInstalled ?? appInstalled(SWIFTBAR_APP, SWIFTBAR_BUNDLE),
+      deps.swiftbarRunning ?? appRunning(APP_PROCESS_PATTERNS.swiftbar),
     ),
     ubersicht(
       paths, deps.ubersicht ?? defaultUbersichtDeps(),
       deps.ubersichtInstalled ?? appInstalled(UBERSICHT_APP, UBERSICHT_BUNDLE),
+      deps.ubersichtRunning ?? appRunning(APP_PROCESS_PATTERNS.ubersicht),
     ),
   ]
 }
@@ -314,7 +358,7 @@ function wrapperPath(paths: HelmPaths): string {
   return join(paths.home, '.local', 'bin', 'helm')
 }
 
-function swiftbar(paths: HelmPaths, deps: SwiftBarDeps, installed: boolean): Check {
+function swiftbar(paths: HelmPaths, deps: SwiftBarDeps, installed: boolean, running: boolean): Check {
   if (!installed) {
     return {
       name: 'SwiftBar',
@@ -341,11 +385,15 @@ function swiftbar(paths: HelmPaths, deps: SwiftBarDeps, installed: boolean): Che
   // SwiftBar only runs plugins with the executable bit set, and a plugin that
   // lost it fails silently — the menu bar simply shows nothing.
   const executable = canAccess(plugin, constants.X_OK)
-  return {
-    name: 'SwiftBar',
-    ok: executable,
-    detail: executable ? plugin : `${plugin} 沒有執行權限，SwiftBar 不會跑它。chmod +x 或重跑 helm install。`,
+  if (!executable) {
+    return {
+      name: 'SwiftBar',
+      ok: false,
+      detail: `${plugin} 沒有執行權限，SwiftBar 不會跑它。chmod +x 或重跑 helm install。`,
+    }
   }
+  if (!running) return notRunning('SwiftBar', plugin, 'SwiftBar')
+  return { name: 'SwiftBar', ok: true, detail: plugin }
 }
 
 /**
@@ -353,7 +401,7 @@ function swiftbar(paths: HelmPaths, deps: SwiftBarDeps, installed: boolean): Che
  * against the folder Übersicht actually scans, because a widget written
  * anywhere else leaves every check green and the wallpaper bare.
  */
-function ubersicht(paths: HelmPaths, deps: UbersichtDeps, installed: boolean): Check {
+function ubersicht(paths: HelmPaths, deps: UbersichtDeps, installed: boolean, running: boolean): Check {
   if (!installed) {
     return {
       name: 'Übersicht',
@@ -374,7 +422,22 @@ function ubersicht(paths: HelmPaths, deps: UbersichtDeps, installed: boolean): C
     }
   }
   if (!isOurs(widget)) return notOurs('Übersicht', widget)
+  if (!running) return notRunning('Übersicht', widget, 'Übersicht')
   return { name: 'Übersicht', ok: true, detail: widget }
+}
+
+/**
+ * Everything on disk is right and the board still shows nothing, because the
+ * app that draws it is not running. Checked last, so a real installation
+ * problem is never reported as「去啟動它」— the same reason the not-installed
+ * branch comes first.
+ */
+function notRunning(name: string, artefact: string, appName: string): Check {
+  return {
+    name,
+    ok: false,
+    detail: `${artefact} 裝好了，但 ${appName} 沒在跑，所以畫不出來。開啟 ${appName}（並在它的偏好裡設為開機啟動）。`,
+  }
 }
 
 /**
