@@ -191,3 +191,102 @@ test('空清單訊息裡的天數取自常數，不是寫死的 14', () => {
   // 常數改了而文案沒改，使用者會看到一個不再成立的數字，而且沒有任何測試會紅。
   assert.match(renderTable(res([]), opts), new RegExp(`近 ${ACTIVITY_WINDOW_DAYS} 天`))
 })
+
+test('摘要不把低信心的中斷講成確定的', () => {
+  // 實測 2026-08-13：底部摘要寫「已中斷 2」，而那兩個都是低信心的 Codex
+  // 判定 —— 同一支程式的 helm sessions 對它們畫的是 ●?。session-status.ts
+  // 寫著「Every face that renders a label has to ask this」，這行摘要是
+  // 那個忘記問的面。
+  const out = renderTable(res([proj({
+    aggregateStatus: 'crashed',
+    sessions: [
+      sess({ adapterId: 'codex', lifecycle: 'crashed', lifecycleConfidence: 'low' }),
+      sess({ adapterId: 'codex', sessionId: 'b', lifecycle: 'crashed', lifecycleConfidence: 'low' }),
+    ],
+  })]), opts)
+  const summary = out.split('\n').find((l) => l.includes('個專案')) ?? ''
+  assert.match(summary, /已中斷 2\?/, summary)
+})
+
+test('摘要在全高信心時不帶問號 —— 問號要是有意義的', () => {
+  const out = renderTable(res([proj({
+    aggregateStatus: 'crashed',
+    sessions: [sess({ lifecycle: 'crashed', lifecycleConfidence: 'high' })],
+  })]), opts)
+  const summary = out.split('\n').find((l) => l.includes('個專案')) ?? ''
+  assert.match(summary, /已中斷 1(?!\?)/, summary)
+})
+
+test('摘要把「沒有動靜」跟「已結束」分開數', () => {
+  // isUnearnedClaim 為真的 session 在 helm sessions 裡標的是「沒有動靜」，
+  // 因為 Codex 沒有結束訊號、ended_clean 只代表 helm 停止猜測。摘要把它們
+  // 混進「已結束」，等於用一個它沒賺到的詞。實測：已結束 142 裡有 5 個是這種。
+  const out = renderTable(res([proj({
+    aggregateStatus: null,
+    sessions: [
+      sess({ lifecycle: 'ended_clean', lifecycleConfidence: 'high' }),
+      sess({ adapterId: 'codex', sessionId: 'b', lifecycle: 'ended_clean', lifecycleConfidence: 'low' }),
+      sess({ adapterId: 'codex', sessionId: 'c', lifecycle: 'ended_clean', lifecycleConfidence: 'low' }),
+    ],
+  })]), opts)
+  const summary = out.split('\n').find((l) => l.includes('個專案')) ?? ''
+  assert.match(summary, /已結束 1(?!\d)/, summary)
+  assert.match(summary, /沒有動靜 2/, summary)
+})
+
+test('在跑與等輸入同樣帶問號 —— Codex 的信心永遠是低的', () => {
+  const out = renderTable(res([proj({
+    aggregateStatus: 'busy',
+    sessions: [sess({ adapterId: 'codex', nativeStatus: 'busy', lifecycleConfidence: 'low' })],
+  })]), opts)
+  const summary = out.split('\n').find((l) => l.includes('個專案')) ?? ''
+  assert.match(summary, /執行中 1\?/, summary)
+})
+
+test('摘要裡高低信心混在一起時仍然帶問號', () => {
+  // some 改成 every 會存活：只要 bucket 裡有一個是猜的，那個數字就已經
+  // 不是純粹的事實了。
+  const out = renderTable(res([proj({
+    aggregateStatus: 'crashed',
+    sessions: [
+      sess({ lifecycle: 'crashed', lifecycleConfidence: 'high' }),
+      sess({ adapterId: 'codex', sessionId: 'b', lifecycle: 'crashed', lifecycleConfidence: 'low' }),
+    ],
+  })]), opts)
+  const summary = out.split('\n').find((l) => l.includes('個專案')) ?? ''
+  assert.match(summary, /已中斷 2\?/, summary)
+})
+
+test('「沒有動靜」不再加問號 —— 那個詞本身就是在說不知道', () => {
+  const out = renderTable(res([proj({
+    aggregateStatus: null,
+    sessions: [sess({ adapterId: 'codex', lifecycle: 'ended_clean', lifecycleConfidence: 'low' })],
+  })]), opts)
+  const summary = out.split('\n').find((l) => l.includes('個專案')) ?? ''
+  assert.match(summary, /沒有動靜 1(?!\?)/, summary)
+})
+
+test('摘要最糟的排最前 —— 中斷不能被埋在後面', () => {
+  const out = renderTable(res([proj({
+    aggregateStatus: 'crashed',
+    sessions: [
+      sess({ nativeStatus: 'busy' }),
+      sess({ sessionId: 'b', lifecycle: 'ended_clean' }),
+      sess({ sessionId: 'c', lifecycle: 'crashed' }),
+    ],
+  })]), opts)
+  const summary = out.split('\n').find((l) => l.includes('個專案')) ?? ''
+  const order = ['已中斷', '執行中', '已結束'].map((w) => summary.indexOf(w))
+  assert.deepEqual(order, [...order].toSorted((a, b) => a - b), summary)
+  assert.ok(order.every((i) => i >= 0), summary)
+})
+
+test('摘要不列出數量為零的狀態', () => {
+  // 「已中斷 0」是一句沒有內容的話，而它佔的是最顯眼的位置。
+  const out = renderTable(res([proj({
+    aggregateStatus: 'busy', sessions: [sess({ nativeStatus: 'busy' })],
+  })]), opts)
+  const summary = out.split('\n').find((l) => l.includes('個專案')) ?? ''
+  assert.doesNotMatch(summary, / 0/, summary)
+  assert.match(summary, /執行中 1/, summary)
+})

@@ -1,8 +1,8 @@
 import type { Board } from '../board.ts'
 import type { ProjectView } from '../projects/group.ts'
 import { ACTIVITY_WINDOW_DAYS } from '../projects/include.ts'
-import { statusOf, type StatusKey } from '../session-status.ts'
-import type { Confidence } from '../types.ts'
+import { UNEARNED_LABEL, isUnearnedClaim, statusOf, type StatusKey } from '../session-status.ts'
+import type { Confidence, SessionState } from '../types.ts'
 import { dim, markOf, paint, relativeTime } from './glyphs.ts'
 import { displayWidth, padTo } from './width.ts'
 
@@ -151,17 +151,38 @@ function renderPrefsWarning(board: Board, opts: RenderOptions): string {
   return dim(`\n⚠ 偏好檔無法解析，這次的釘選與隱藏設定沒有生效。\n  ${where}\n`, opts.color)
 }
 
+/**
+ * Buckets by the label a session would actually be given, not by its raw
+ * status key — and marks a bucket that contains a guess.
+ *
+ * Measured 2026-08-13: this line read 「已中斷 2・…・已結束 142」while both
+ * crashes were low-confidence Codex verdicts and five of the 142 were
+ * `isUnearnedClaim`, which `helm sessions` prints as 「沒有動靜」. Every other
+ * face carries a `?` or the unearned label; this one stated all of it flat.
+ * `session-status.ts` says every face that renders a label has to ask — this
+ * is the face that forgot.
+ */
 function renderSummary(projects: readonly ProjectView[]): string {
-  const counts = projects
-    .flatMap((p) => p.sessions)
-    .reduce<Record<StatusKey, number>>(
-      (acc, s) => ({ ...acc, [statusOf(s)]: acc[statusOf(s)] + 1 }),
-      { busy: 0, idle: 0, ended: 0, crashed: 0 },
-    )
-  const parts = (['crashed', 'busy', 'idle', 'ended'] as const)
-    .filter((k) => counts[k] > 0)
-    .map((k) => `${LABEL[k]} ${counts[k]}`)
+  const sessions = projects.flatMap((p) => p.sessions)
+  const parts = SUMMARY_ORDER.flatMap((label) => {
+    const inBucket = sessions.filter((s) => summaryLabel(s) === label)
+    if (inBucket.length === 0) return []
+    // 「沒有動靜」already says helm does not know, so a `?` on top of it would
+    // be saying the same thing twice.
+    const guess = label !== UNEARNED_LABEL
+      && inBucket.some((s) => s.lifecycleConfidence === 'low')
+    return [`${label} ${inBucket.length}${guess ? '?' : ''}`]
+  })
   return `\n${projects.length} 個專案・${parts.join('・')}`
+}
+
+/** Worst first, with the admission last — it is the least actionable. */
+const SUMMARY_ORDER: readonly string[] = [
+  LABEL.crashed, LABEL.busy, LABEL.idle, LABEL.ended, UNEARNED_LABEL,
+]
+
+function summaryLabel(s: SessionState): string {
+  return isUnearnedClaim(s) ? UNEARNED_LABEL : LABEL[statusOf(s)]
 }
 
 /** The board is now one row per project, so the way down has to be signposted. */
