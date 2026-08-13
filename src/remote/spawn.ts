@@ -52,12 +52,13 @@ export function refreshArgs(entry: string = ENTRY): string[] {
  * manager that resolves to the real binary, which exists in the bare PATH a
  * GUI-launched process gets.
  */
-export function spawnPrRefresh(paths: HelmPaths): void {
+/** Returns whether a process was actually started. */
+export function spawnPrRefresh(paths: HelmPaths): boolean {
   // Same guard as `defaults.ts`, and for the same reason. Making the caller
   // inject a no-op was not enough: every call site has to remember, and the
   // ones that forgot forked a real `gh` and overwrote the user's real
   // ~/.helm/prs.json on every `npm test`. The protection belongs down here.
-  if (process.env['HELM_NO_REAL_PREFS'] === '1') return
+  if (process.env['HELM_NO_REAL_PREFS'] === '1') return false
 
   const child = spawn(process.execPath, refreshArgs(), {
     detached: true,
@@ -71,4 +72,5 @@ export function spawnPrRefresh(paths: HelmPaths): void {
     // A refresh that could not start is a stale PR row and nothing else.
   })
   child.unref()
+  return true
 }

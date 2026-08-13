@@ -49,18 +49,11 @@ test('沒有指定家目錄時不設 HELM_FAKE_HOME —— 那是正式路徑', 
 })
 
 test('測試環境下完全不 spawn —— 讓呼叫端記得注入是不夠的', () => {
-  // 這是第四次同型事故：collectStatus 讓 spawn 可注入之後，忘記注入的
-  // 呼叫端照樣 fork 出真的 gh 並覆寫使用者真實的 prs.json。護欄要在底層。
+  // 第四次同型事故：collectStatus 讓 spawn 可注入之後，忘記注入的呼叫端
+  // 照樣 fork 出真的 gh 並覆寫使用者真實的 prs.json。護欄要在底層。
+  //
+  // 回傳值而不是數行程：子行程要時間才會出現在 pgrep 裡，用時序判斷會
+  // 讓這條測試在拿掉 guard 之後照樣通過（實測就是這樣）。
   assert.equal(process.env['HELM_NO_REAL_PREFS'], '1', 'test script 應該設好它')
-  const before = countRefreshProcesses()
-  spawnPrRefresh({ home: '/tmp/nope' } as never)
-  assert.equal(countRefreshProcesses(), before, '一個行程都不該被 fork')
+  assert.equal(spawnPrRefresh({ home: '/tmp/nope' } as never), false)
 })
-
-function countRefreshProcesses(): number {
-  try {
-    return execFileSync('pgrep', ['-fc', 'main.ts pr-refresh'], { encoding: 'utf8' }).trim().length
-  } catch {
-    return 0
-  }
-}

@@ -1,8 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { scanRollouts } from './scan.ts'
+import { scanRollouts, scanRolloutsDetailed } from './scan.ts'
 import { tempDir } from '../../temp-dir.ts'
 
 const ID = (n: number) => `019fc64c-6b8a-7882-8c7b-c019bd1848${String(n).padStart(2, '0')}`
@@ -92,4 +92,26 @@ test('深度不對的檔案不會被漏掉也不會重複', () => {
   const found = scanRollouts(root, since(14))
   assert.equal(found.length, 2)
   assert.equal(new Set(found.map((f) => f.path)).size, 2, '不得重複')
+})
+
+test('目錄存在但讀不到時要回報 —— 那跟「沒裝 Codex」是兩件事', () => {
+  // 兩者原本都被同一個 catch 吞掉，於是 ~/.codex chmod 000 produced
+  // 半個空看板加上 doctor 回報「皆可讀取」。
+  const root = tempDir('helm-codex-')
+  const locked = join(root, '2026', '08')
+  mkdirSync(locked, { recursive: true })
+  chmodSync(locked, 0o000)
+  try {
+    const r = scanRolloutsDetailed(root, since(14))
+    assert.deepEqual(r.files, [])
+    assert.deepEqual(r.unreadable, [locked])
+  } finally {
+    chmodSync(locked, 0o700)
+  }
+})
+
+test('目錄不存在時安靜 —— 沒裝 Codex 是正常狀態', () => {
+  const r = scanRolloutsDetailed(join(tempDir('helm-codex-'), 'nope'), since(14))
+  assert.deepEqual(r.files, [])
+  assert.deepEqual(r.unreadable, [], '不存在不該被當成錯誤')
 })

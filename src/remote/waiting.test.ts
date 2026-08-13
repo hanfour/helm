@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { waitingOn, type PrStatus } from './waiting.ts'
+import { unknownWaiting, waitingOn, type PrStatus } from './waiting.ts'
 
 const pr = (over: Partial<PrStatus> = {}): PrStatus => ({
   isDraft: false,
@@ -68,22 +68,31 @@ test('草稿蓋過一切 —— 它不在等任何人', () => {
   }
 })
 
-test('每一種都有給人看的字，而且不是空字串', () => {
-  const seen = new Set<string>()
-  for (const p of [
-    pr({ isDraft: true }),
-    pr({ reviewDecision: 'CHANGES_REQUESTED' }),
-    pr({ reviewDecision: 'REVIEW_REQUIRED' }),
-    pr({ reviewDecision: 'APPROVED', checks: [check('FAILURE')] }),
-    pr({ reviewDecision: 'APPROVED' }),
-  ]) {
-    const r = waitingOn(p)
-    assert.ok(r.label.length > 0, r.kind)
-    seen.add(r.kind)
-  }
-  assert.equal(seen.size, 5, '五種狀態要各自不同')
+test('每一種狀態對到它自己的那句話 —— 對調要抓得到', () => {
+  // 原本只有 assert.ok(label.length > 0)：五個 label 全改成 'x' 照樣過，
+  // 「等你改」與「等人審」對調也照樣過。使用者會看到「等人審」，
+  // 而實際上是 reviewer 要他改。
+  assert.equal(waitingOn(pr({ isDraft: true })).label, '草稿')
+  assert.equal(waitingOn(pr({ reviewDecision: 'CHANGES_REQUESTED' })).label, '等你改')
+  assert.equal(waitingOn(pr({ reviewDecision: 'REVIEW_REQUIRED' })).label, '等人審')
+  assert.equal(waitingOn(pr({ reviewDecision: 'APPROVED', checks: [check('FAILURE')] })).label, '等 CI')
+  assert.equal(waitingOn(pr({ reviewDecision: 'APPROVED' })).label, '可合併')
 })
 
-test('認不得的 reviewDecision 當成還沒審 —— 不猜', () => {
-  assert.equal(waitingOn(pr({ reviewDecision: 'SOMETHING_NEW' as never })).kind, 'review')
+test('已完成但沒有結論的 check 不算失敗', () => {
+  // 原本那條看似在測 null conclusion，但它同時把 status 設成 IN_PROGRESS，
+  // 先被上一行擋掉了 —— 又一次 fixture 讓測試走不到它要驗的那一行。
+  const checks = [check(null, 'COMPLETED')]
+  assert.equal(waitingOn(pr({ reviewDecision: 'APPROVED', checks })).kind, 'mergeable')
+})
+
+test('BAD_CONCLUSIONS 的每一個值都要被當成失敗', () => {
+  for (const c of ['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED', 'STARTUP_FAILURE', 'STALE']) {
+    assert.equal(waitingOn(pr({ reviewDecision: 'APPROVED', checks: [check(c)] })).kind, 'ci', c)
+  }
+})
+
+test('狀態讀不到時是 unknown，不是任何一種判定', () => {
+  assert.equal(unknownWaiting().kind, 'unknown')
+  assert.match(unknownWaiting().label, /讀不到/)
 })

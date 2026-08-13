@@ -15,10 +15,17 @@ const file = (over: Partial<RolloutFile> & { rolloutId: string }): RolloutFile =
   ...over,
 })
 
+/** Records what `scan` was asked for, so the arguments are observable. */
+const asked: { dir?: string; sinceMs?: number } = {}
+
 function deps(over: Partial<CodexDeps> = {}): CodexDeps {
   const metas: Record<string, RolloutMeta> = { r1: { sessionId: SID, cwd: '/p/a' } }
   return {
-    scan: () => ({ files: [file({ rolloutId: 'r1' })], unreadable: [] }),
+    scan: (dir, sinceMs) => {
+      asked.dir = dir
+      asked.sinceMs = sinceMs
+      return { files: [file({ rolloutId: 'r1' })], unreadable: [] }
+    },
     meta: (f) => metas[f.rolloutId] ?? null,
     liveCwds: () => new Set<string>(),
     flush: () => {},
@@ -168,4 +175,39 @@ test('讀得到的部分照常交出來，同時說出讀不到的那些', () =>
 
 test('沒有讀不到的目錄時不帶 failure', () => {
   assert.equal(run().failure, undefined)
+})
+
+test('掃的是 sessionsDir，窗口是 windowDays 天前 —— 這四個參數之前完全不可觀測', () => {
+  // 原本的 scan stub 忽略全部參數，於是「掃錯目錄」（永遠 0 個 Codex
+  // session）與「窗口從 14 天變 140 天」都不會讓任何測試變紅。
+  run()
+  assert.equal(asked.dir, '/s')
+  assert.equal(asked.sinceMs, NOW - 14 * 86_400_000)
+})
+
+test('活動窗口真的會濾掉舊 session', () => {
+  const old = file({ rolloutId: 'r1', mtimeMs: NOW - 20 * 86_400_000 })
+  const { sessions } = run({ scan: () => ({ files: [old], unreadable: [] }) })
+  assert.deepEqual(sessions, [], '20 天前的不該出現在 14 天的窗口裡')
+})
+
+test('釘選的專案不受窗口約束（規格 §7）—— Codex 這邊之前一行測試都沒有', () => {
+  // status.test.ts 有一條註解說「那條例外會變死碼」，但只防到了
+  // Claude Code 那半邊。使用者釘選的 Codex 專案超過 14 天沒動就默默消失。
+  const old = file({ rolloutId: 'r1', mtimeMs: NOW - 90 * 86_400_000 })
+  const { sessions } = discoverCodex(
+    { sessionsDir: '/s', cacheFile: '/c', windowDays: 14, nowMs: NOW, alwaysInclude: ['/p/a'] },
+    deps({ scan: (dir, sinceMs) => { asked.sinceMs = sinceMs; return { files: [old], unreadable: [] } } }),
+  )
+  assert.equal(sessions.length, 1, '釘選的要留下')
+  assert.equal(asked.sinceMs, 0, '有釘選時掃描要看到更早的檔案')
+})
+
+test('沒有釘選任何東西時，掃描不會白掃整個歷史', () => {
+  run()
+  assert.equal(asked.sinceMs, NOW - 14 * 86_400_000)
+})
+
+test('kind 是 interactive —— 那是看板用來分辨背景任務的欄位', () => {
+  assert.equal(run().sessions[0]?.kind, 'interactive')
 })

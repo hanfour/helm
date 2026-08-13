@@ -93,7 +93,7 @@ test('快取命中時完全不碰檔案', () => {
   assert.deepEqual(resolveMeta(file, cache, boom), { sessionId: SID, cwd: CWD })
 })
 
-test('快取寫得出去也讀得回來，而且是原子的', () => {
+test('快取寫得出去也讀得回來', () => {
   const path = join(tempDir('helm-codex-'), 'cache.json')
   const cache = loadMetaCache(path)
   const file = { rolloutId: 'r1', path: '/nope', startedAt: 0, mtimeMs: 0 }

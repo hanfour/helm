@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readPrCache, shouldRefresh, writePrCache, type PrCache } from './cache.ts'
 import { tempDir } from '../temp-dir.ts'
@@ -24,17 +24,27 @@ test('寫得出去也讀得回來', () => {
   assert.deepEqual(readPrCache(f), cache())
 })
 
-test('寫入是原子的 —— 不留暫存檔', () => {
+test('寫到一半失敗時，原檔完好無缺', () => {
+  // 原本三個斷言沒有一個測到原子性：檢查最後一個字元是 '}'、檢查
+  // .tmp 不存在（直接寫也成立）、以及 assert.ok(dir.length > 0) —— 恆真。
+  // 真正要防的是「使用者拿到半個 JSON」。
   const f = file()
   writePrCache(f, cache())
-  const dir = f.slice(0, f.lastIndexOf('/'))
+  const good = readFileSync(f, 'utf8')
+
+  // 讓 rename 失敗：把目標換成一個非空目錄。
+  const asDir = join(tempDir('helm-pr-'), 'prs.json')
+  mkdirSync(asDir, { recursive: true })
+  writeFileSync(join(asDir, 'occupied'), 'x')
+  assert.equal(writePrCache(asDir, cache()), false)
+  assert.equal(existsSync(join(asDir, 'occupied')), true, '原本的內容沒被動到')
+
+  assert.equal(readFileSync(f, 'utf8'), good, '另一個檔案不受影響')
   assert.deepEqual(
-    readFileSync(f, 'utf8').trim().at(-1),
-    '}',
-    '完整的 JSON',
+    readdirSync(asDir).filter((n) => n.includes('.tmp')),
+    [],
+    '失敗之後不留暫存檔',
   )
-  assert.equal(existsSync(`${f}.${process.pid}.tmp`), false)
-  assert.ok(dir.length > 0)
 })
 
 test('沒有快取檔時回 null —— 那是第一次跑，不是錯誤', () => {
