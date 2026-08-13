@@ -216,3 +216,58 @@ test('Codex：未來的時間戳不會被算成「超過 30 分鐘」', () => {
   const v = decideCodexLifecycle({ cwdHasProcess: false, lastEventMs: DAY + 60_000, nowMs: DAY })
   assert.equal(v.lifecycle, 'running')
 })
+
+test('Codex：結尾是完成事件時不叫它中斷 —— rollout 自己寫著它做完了', () => {
+  // 實測 2026-08-13，這台機器 88 個 Codex session 裡 86 個的最後一筆事件是
+  // task_complete 或 turn_aborted，只有 2 個真的停在半途。而使用者看到紅色
+  // 「1 中斷」去找卻找不到誰的那兩個，都是跑完的 codex exec 批次工作。
+  const v = decideCodexLifecycle({
+    cwdHasProcess: false, lastEventMs: DAY - 90 * 60_000, nowMs: DAY, endedWith: 'finished',
+  })
+  assert.equal(v.lifecycle, 'ended_clean')
+})
+
+test('Codex：結尾在半途才是中斷', () => {
+  const v = decideCodexLifecycle({
+    cwdHasProcess: false, lastEventMs: DAY - 90 * 60_000, nowMs: DAY, endedWith: 'midflight',
+  })
+  assert.equal(v.lifecycle, 'crashed')
+})
+
+test('Codex：讀不到結尾時退回計時器，不假裝知道', () => {
+  const v = decideCodexLifecycle({
+    cwdHasProcess: false, lastEventMs: DAY - 90 * 60_000, nowMs: DAY, endedWith: 'unknown',
+  })
+  assert.equal(v.lifecycle, 'crashed', '沒有訊號時維持原本的保守判定')
+})
+
+test('Codex：有行程就是在跑，結尾寫什麼都不影響', () => {
+  for (const endedWith of ['finished', 'midflight', 'unknown'] as const) {
+    const v = decideCodexLifecycle({ cwdHasProcess: true, lastEventMs: 0, nowMs: DAY, endedWith })
+    assert.equal(v.lifecycle, 'running', endedWith)
+  }
+})
+
+test('Codex：30 分鐘的防抖動對半途結尾仍然有效', () => {
+  // 兩筆事件之間本來就會有空檔。剛停 10 分鐘不該立刻叫中斷。
+  const v = decideCodexLifecycle({
+    cwdHasProcess: false, lastEventMs: DAY - 10 * 60_000, nowMs: DAY, endedWith: 'midflight',
+  })
+  assert.equal(v.lifecycle, 'running')
+})
+
+test('Codex：完成的結尾不必等 30 分鐘 —— 它已經做完了', () => {
+  const v = decideCodexLifecycle({
+    cwdHasProcess: false, lastEventMs: DAY - 5 * 60_000, nowMs: DAY, endedWith: 'finished',
+  })
+  assert.equal(v.lifecycle, 'ended_clean')
+})
+
+test('Codex 的信心一律低 —— 全部是從行程表與檔案推論出來的', () => {
+  for (const endedWith of ['finished', 'midflight', 'unknown'] as const) {
+    const v = decideCodexLifecycle({
+      cwdHasProcess: false, lastEventMs: DAY - 90 * 60_000, nowMs: DAY, endedWith,
+    })
+    assert.equal(v.confidence, 'low', endedWith)
+  }
+})

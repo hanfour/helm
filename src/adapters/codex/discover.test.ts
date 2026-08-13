@@ -28,6 +28,8 @@ function deps(over: Partial<CodexDeps> = {}): CodexDeps {
     },
     meta: (f) => metas[f.rolloutId] ?? null,
     liveCwds: () => new Set<string>(),
+    // 預設 unknown＝退回計時器，所以既有斷言的意思不變。
+    ending: () => 'unknown',
     flush: () => {},
     ...over,
   }
@@ -210,4 +212,53 @@ test('沒有釘選任何東西時，掃描不會白掃整個歷史', () => {
 
 test('kind 是 interactive —— 那是看板用來分辨背景任務的欄位', () => {
   assert.equal(run().sessions[0]?.kind, 'interactive')
+})
+
+test('結尾是完成事件的 session 不會被叫做中斷', () => {
+  const { sessions } = run({
+    scan: () => ({ files: [file({ rolloutId: 'r1', mtimeMs: NOW - 90 * 60_000 })], unreadable: [] }),
+    ending: () => 'finished',
+  })
+  assert.equal(sessions[0]?.lifecycle, 'ended_clean')
+})
+
+test('結尾在半途且久無動靜才是中斷', () => {
+  const { sessions } = run({
+    scan: () => ({ files: [file({ rolloutId: 'r1', mtimeMs: NOW - 90 * 60_000 })], unreadable: [] }),
+    ending: () => 'midflight',
+  })
+  assert.equal(sessions[0]?.lifecycle, 'crashed')
+})
+
+test('有行程在跑時根本不去讀檔尾 —— 那是一次沒必要的 I/O', () => {
+  let reads = 0
+  const { sessions } = run({
+    liveCwds: () => new Set(['/p/a']),
+    ending: () => {
+      reads++
+      return 'midflight'
+    },
+  })
+  assert.equal(sessions[0]?.lifecycle, 'running')
+  assert.equal(reads, 0, '有行程就是在跑，不需要問結尾')
+})
+
+test('讀檔尾讀的是最新的那個 rollout，不是隨便一個', () => {
+  // 一個 session 橫跨多個檔案（實測最多 33 個），舊檔的結尾說明不了現在。
+  const asked: string[] = []
+  run({
+    scan: () => ({
+      files: [
+        file({ rolloutId: 'old', mtimeMs: NOW - 5 * 3600_000 }),
+        file({ rolloutId: 'new', mtimeMs: NOW - 90 * 60_000 }),
+      ],
+      unreadable: [],
+    }),
+    meta: () => ({ sessionId: SID, cwd: '/p/a' }),
+    ending: (p) => {
+      asked.push(p)
+      return 'finished'
+    },
+  })
+  assert.deepEqual(asked, ['/r/new.jsonl'], asked.join(','))
 })

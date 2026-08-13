@@ -1,7 +1,8 @@
 import type { SessionState } from '../../types.ts'
-import { CODEX_ABANDON_MS, decideCodexLifecycle } from '../../reconcile/lifecycle.ts'
+import { CODEX_ABANDON_MS, decideCodexLifecycle, type CodexEnding } from '../../reconcile/lifecycle.ts'
 import { loadMetaCache, resolveMeta, type RolloutMeta } from './meta.ts'
 import { liveCodexCwds, matchesLive } from './processes.ts'
+import { readEnding } from './ending.ts'
 import { scanRolloutsDetailed, type RolloutFile, type ScanResult } from './scan.ts'
 
 export const CODEX_ADAPTER_ID = 'codex'
@@ -19,6 +20,8 @@ export interface CodexDeps {
   scan: (sessionsDir: string, sinceMs: number) => ScanResult
   meta: (file: RolloutFile) => RolloutMeta | null
   liveCwds: () => Set<string>
+  /** How the newest rollout's log ends. Only consulted when no process is live. */
+  ending: (path: string) => CodexEnding
   flush: () => void
 }
 
@@ -36,6 +39,7 @@ export function defaultCodexDeps(cacheFile: string): CodexDeps {
     scan: scanRolloutsDetailed,
     meta: (file) => resolveMeta(file, cache),
     liveCwds: () => liveCodexCwds(),
+    ending: readEnding,
     flush: () => cache.flush(),
   }
 }
@@ -97,10 +101,16 @@ export function discoverCodex(opts: CodexOptions, deps: CodexDeps): CodexResult 
     // everything else outside it is dropped here, where the cwd is known.
     if (updatedAt < sinceMs && !always.has(cwd)) return []
 
+    const cwdHasProcess = matchesLive(live, cwd)
     const verdict = decideCodexLifecycle({
-      cwdHasProcess: matchesLive(live, cwd),
+      cwdHasProcess,
       lastEventMs: updatedAt,
       nowMs: opts.nowMs,
+      // Read lazily: a session with a live process is running whatever its log
+      // says, so asking would be an open() per session for nothing. The newest
+      // rollout is the one that matters — a session spans up to 33 files here,
+      // and how an older one ended says nothing about now.
+      endedWith: cwdHasProcess ? 'unknown' : deps.ending(newest.path),
     })
     return [{
       adapterId: CODEX_ADAPTER_ID,

@@ -138,12 +138,23 @@ export const CODEX_ABANDON_MS = 30 * 60_000
  */
 export const CODEX_UNKNOWN_MS = 6 * 3600_000
 
+/**
+ * What the session's last recorded event says about how it stopped.
+ *
+ * `finished` covers Codex's `task_complete` and `turn_aborted`; `midflight`
+ * is anything else, i.e. the log stops in the middle of a turn. `unknown` is
+ * the honest answer when the tail could not be read.
+ */
+export type CodexEnding = 'finished' | 'midflight' | 'unknown'
+
 export interface CodexLifecycleInput {
   /** A running `codex` process whose cwd matches this session's. */
   cwdHasProcess: boolean
   /** Newest write to any of the session's rollout files. */
   lastEventMs: number
   nowMs: number
+  /** Defaults to `unknown`, which reproduces the pre-2026-08-14 timer rule. */
+  endedWith?: CodexEnding
 }
 
 /**
@@ -160,9 +171,19 @@ export interface CodexLifecycleInput {
  */
 export function decideCodexLifecycle(input: CodexLifecycleInput): LifecycleVerdict {
   if (input.cwdHasProcess) return { lifecycle: 'running', confidence: 'low' }
+  // A session whose log ends on a completed turn did not crash, however long
+  // ago that was — no timer needed, and no timer can tell you this.
+  //
+  // Measured 2026-08-13 across this machine's 88 Codex sessions: 86 end on
+  // `task_complete` or `turn_aborted` and 2 stop mid-turn. The two that put
+  // 「1 中斷」in the menu bar, sending the user hunting for a crash that had
+  // never happened, were finished `codex exec` batch jobs.
+  if (input.endedWith === 'finished') return { lifecycle: 'ended_clean', confidence: 'low' }
   // `Math.max(0, …)` because a clock skew or a touched file can put the last
   // event in the future, and a negative age must not read as "long ago".
   const idleMs = Math.max(0, input.nowMs - input.lastEventMs)
+  // Still a debounce, but only for the mid-turn case now: two events in a live
+  // session are routinely minutes apart, and `pgrep` can lose a race.
   if (idleMs <= CODEX_ABANDON_MS) return { lifecycle: 'running', confidence: 'low' }
   return idleMs > CODEX_UNKNOWN_MS
     ? { lifecycle: 'ended_clean', confidence: 'low' }
