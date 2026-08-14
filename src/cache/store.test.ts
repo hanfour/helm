@@ -125,3 +125,18 @@ test('快取檔以 0600 寫出 —— 裡面是 brief，不是公開資訊', () 
   writeCache(file, EMPTY_CACHE)
   assert.equal(statSync(file).mode & 0o777, 0o600, '快取檔不該是全世界可讀')
 })
+
+test('taskStatus 欄位在快取寫入與讀出時完整保留', () => {
+  // 舊快取沒有 taskStatus，但讀出時不會失敗。新快取有 taskStatus 時，
+  // 寫入後讀出應該原樣回傳，不能被吃掉。
+  const f = tmpFile()
+  const briefWithStatus: Brief = {
+    ...BRIEF,
+    taskStatus: 'done',
+  }
+  const c = setBrief(EMPTY_CACHE, 's1', { digest: 'd1', generatedAt: 100, gitBranch: null, body: briefWithStatus })
+  writeCache(f, c)
+  const read = readCache(f)
+  assert.ok(read.briefs['s1'], 'brief entry should exist in cache')
+  assert.equal(read.briefs['s1']?.body.taskStatus, 'done', 'taskStatus should round-trip through cache')
+})
