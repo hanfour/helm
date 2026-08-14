@@ -47,3 +47,13 @@ test('降級輸出列出原始 prompt 並說明簡報產生失敗', () => {
 test('降級輸出在沒有 prompt 時仍給出可讀訊息', () => {
   assert.match(renderFallback([]), /沒有可用的/)
 })
+
+test('簡報標題區說出任務狀態', () => {
+  const out = renderBriefMarkdown({ ...BRIEF, taskStatus: 'blocked' }, META)
+  assert.match(out, /任務卡住/)
+})
+
+test('舊簡報沒有 taskStatus 時標題區不多一行空的', () => {
+  const out = renderBriefMarkdown({ ...BRIEF, taskStatus: undefined }, META)
+  assert.doesNotMatch(out, /任務狀態/)
+})
