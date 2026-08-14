@@ -620,3 +620,20 @@ test('高信心的已結束照樣講「已結束」', () => {
   })]), OPTS)
   assert.match(body(out), /已結束/)
 })
+
+test('選單列的 session 列也顯示任務狀態', () => {
+  const out = renderSwiftBar(board([proj({
+    sessions: [sess({ lifecycle: 'ended_clean', taskStatus: 'done' })],
+  })]), OPTS)
+  const line = body(out).split('\n').find((l) => l.includes('abcdef12')) ?? ''
+  assert.match(line, /任務完成/, line)
+})
+
+test('選單列沒有任務狀態時不多出分隔空白', () => {
+  const out = renderSwiftBar(board([proj({
+    sessions: [sess({ lifecycle: 'ended_clean', taskStatus: null })],
+  })]), OPTS)
+  const line = body(out).split('\n').find((l) => l.includes('abcdef12')) ?? ''
+  assert.doesNotMatch(line, /任務/, line)
+  assert.doesNotMatch(line, / {3}/, `多出連續空白：${JSON.stringify(line)}`)
+})

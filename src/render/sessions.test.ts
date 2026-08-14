@@ -119,3 +119,21 @@ test('低信心的「已結束」在這裡也不能講得像確定的', () => {
   assert.doesNotMatch(out, /已結束/, out)
   assert.match(out, /沒有動靜/)
 })
+
+test('有任務狀態時顯示在那一列', () => {
+  const out = renderSessions(proj({
+    sessions: [sess({ lifecycle: 'ended_clean', taskStatus: 'blocked' })],
+  }), opts)
+  assert.match(out, /已結束/)
+  assert.match(out, /任務卡住/)
+})
+
+test('沒有任務狀態時不留下空欄位', () => {
+  // 156 個 session 裡只有 3 個有簡報。多一個永遠是空的欄位等於多 153 行沒有內容的字。
+  const out = renderSessions(proj({
+    sessions: [sess({ lifecycle: 'ended_clean', taskStatus: null })],
+  }), opts)
+  const line = out.split('\n').find((l) => l.includes('已結束')) ?? ''
+  assert.doesNotMatch(line, /任務/, line)
+  assert.equal(line, line.trimEnd(), `結尾有多餘空白：${JSON.stringify(line)}`)
+})
