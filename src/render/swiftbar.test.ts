@@ -636,4 +636,8 @@ test('選單列沒有任務狀態時不多出分隔空白', () => {
   const line = body(out).split('\n').find((l) => l.includes('abcdef12')) ?? ''
   assert.doesNotMatch(line, /任務/, line)
   assert.doesNotMatch(line, / {3}/, `多出連續空白：${JSON.stringify(line)}`)
+  // / {3}/ 只抓得到三個以上連續空白，taskSuffix 回傳兩個空格的殘留（例如把
+  // '' 錯改成 '  '）會補在這一列結尾，doesNotMatch 那條看不出來 —— sessions.ts
+  // 那邊已經吃過這個虧（見 sessions.test.ts 的 trimEnd 斷言），這裡補上同一種。
+  assert.equal(line, line.trimEnd(), `結尾有多餘空白：${JSON.stringify(line)}`)
 })
