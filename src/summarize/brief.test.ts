@@ -68,3 +68,24 @@ test('runner 拋錯時回傳 null 而不向上拋', async () => {
 test('runner 回傳無法解析的內容時回傳 null', async () => {
   assert.equal(await generateBrief(INPUT, async () => '???'), null)
 })
+
+test('三個合法的 taskStatus 都解析得出來', () => {
+  for (const value of ['done', 'in_progress', 'blocked'] as const) {
+    const raw = JSON.stringify({ goal: 'g', taskStatus: value })
+    assert.equal(parseBriefJson(raw)?.taskStatus, value, value)
+  }
+})
+
+test('taskStatus 是模型自己編的值時視為未知，不猜一個', () => {
+  // 「完成了」「finished」這種回答不能硬塞進三個值之一。猜錯的方向是
+  // 把沒做完的說成做完了。
+  const raw = JSON.stringify({ goal: 'g', taskStatus: '完成了' })
+  assert.equal(parseBriefJson(raw)?.taskStatus, undefined)
+})
+
+test('舊快取沒有 taskStatus 欄位時其餘欄位照常解析', () => {
+  const raw = JSON.stringify({ goal: 'g', nextStep: 'n' })
+  const brief = parseBriefJson(raw)
+  assert.equal(brief?.goal, 'g')
+  assert.equal(brief?.taskStatus, undefined)
+})

@@ -19,6 +19,9 @@ const BriefSchema = z.object({
   blockers: z.array(z.string()).default([]),
   files: z.array(z.string()).default([]),
   prs: z.array(z.string()).default([]),
+  // 不給 default：缺少與非法都要落在 undefined，那是「未知」。
+  // 給了 default 等於替模型回答，而預設值一定會是三種說法裡的某一種。
+  taskStatus: z.enum(['done', 'in_progress', 'blocked']).optional().catch(undefined),
 })
 
 /**

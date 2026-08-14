@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { z } from 'zod'
+import type { TaskStatus } from '../task-status.ts'
 
 export interface Brief {
   goal: string
@@ -10,6 +11,11 @@ export interface Brief {
   blockers: string[]
   files: string[]
   prs: string[]
+  /**
+   * 選用：舊快取沒有這個欄位，模型回傳非法值時也會是 undefined。
+   * 兩種情況都代表未知，呈現面一律不顯示。
+   */
+  taskStatus?: TaskStatus | undefined
 }
 
 export interface BriefEntry {
@@ -42,6 +48,7 @@ const BriefSchema = z.object({
   blockers: z.array(z.string()).default([]),
   files: z.array(z.string()).default([]),
   prs: z.array(z.string()).default([]),
+  taskStatus: z.enum(['done', 'in_progress', 'blocked']).optional().catch(undefined),
 })
 
 const BriefEntrySchema = z.object({

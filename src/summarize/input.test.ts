@@ -60,3 +60,18 @@ test('buildSummaryInput 不修改輸入', () => {
   buildSummaryInput(session, digest, git)
   assert.deepEqual(digest, d)
 })
+
+test('提示詞要求 taskStatus，並說明三個值各是什麼意思', () => {
+  const prompt = renderSummaryPrompt(buildSummaryInput(session, digest, git))
+  assert.match(prompt, /taskStatus/)
+  for (const value of ['done', 'in_progress', 'blocked']) {
+    assert.match(prompt, new RegExp(value), value)
+  }
+})
+
+test('提示詞允許沒有下一步，否則模型會為了填滿欄位編一個出來', () => {
+  // 原本那句是「回來後應該做的下一件事（具體到可以直接動手）」，整份提示詞
+  // 的前提都是這個 session 被中斷了。不鬆開的話 taskStatus 永遠不會是 done。
+  const prompt = renderSummaryPrompt(buildSummaryInput(session, digest, git))
+  assert.match(prompt, /做完了.*留空|留空.*做完了|沒有下一步/)
+})
