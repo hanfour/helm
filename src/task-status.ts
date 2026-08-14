@@ -5,7 +5,9 @@
  * 的那件事做完了沒」。一個已結束的 session 可能是做完才關掉，也可能是卡住
  * 就沒再回去，看板對這兩種畫的是同一個灰點。
  */
-export type TaskStatus = 'done' | 'in_progress' | 'blocked'
+/** zod 的 enum 需要一個 tuple。型別由它推導，兩者不會分岔。 */
+export const TASK_STATUSES = ['done', 'in_progress', 'blocked'] as const
+export type TaskStatus = (typeof TASK_STATUSES)[number]
 
 /** 刻意與 session-status.ts 的用詞不重疊：同一列會同時出現兩者。 */
 export const TASK_LABEL: Record<TaskStatus, string> = {

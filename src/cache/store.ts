@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { z } from 'zod'
-import type { TaskStatus } from '../task-status.ts'
+import { TASK_STATUSES, type TaskStatus } from '../task-status.ts'
 
 export interface Brief {
   goal: string
@@ -48,7 +48,7 @@ const BriefSchema = z.object({
   blockers: z.array(z.string()).default([]),
   files: z.array(z.string()).default([]),
   prs: z.array(z.string()).default([]),
-  taskStatus: z.enum(['done', 'in_progress', 'blocked']).optional().catch(undefined),
+  taskStatus: z.enum(TASK_STATUSES).optional().catch(undefined),
 })
 
 const BriefEntrySchema = z.object({

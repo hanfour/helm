@@ -174,3 +174,15 @@ test('任務狀態在選單列與 helm sessions 用同一個詞', () => {
     assert.ok(inSessions.includes(want), `helm sessions 對 ${session.sessionId} 用的不是「${want}」：${inSessions}`)
   }
 })
+
+test('helm status 與桌面標題都不畫任務狀態', () => {
+  // 上一條測試守的是「兩個面用同一個詞」；這條守的是另一半——「另外兩個面
+  // 什麼都不畫」。render/table.ts 是一個專案一列的整案（見該檔開頭的說明），
+  // task status 是單一 session 的判斷，塞進整案列會是哪個 session 的？桌面
+  // 標題同理，只算行程狀態的數量。SESSIONS 裡已經有帶 taskStatus 的 session
+  // （taskdone / taskprog / taskblok），沒有守住的話這裡不會發現。
+  const t = table()
+  const title = widgetTitle()
+  assert.doesNotMatch(t, /任務/, `helm status 不該畫任務狀態：${t}`)
+  assert.doesNotMatch(title.word, /任務/, `桌面標題不該畫任務狀態：${title.word}`)
+})

@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { parseBriefJson, generateBrief } from './brief.ts'
 import type { SummaryInput } from './input.ts'
+import { TASK_STATUSES } from '../task-status.ts'
 
 const INPUT: SummaryInput = {
   sessionId: 's1', cwd: '/p', gitBranch: 'main',
@@ -70,7 +71,7 @@ test('runner 回傳無法解析的內容時回傳 null', async () => {
 })
 
 test('三個合法的 taskStatus 都解析得出來', () => {
-  for (const value of ['done', 'in_progress', 'blocked'] as const) {
+  for (const value of TASK_STATUSES) {
     const raw = JSON.stringify({ goal: 'g', taskStatus: value })
     const brief = parseBriefJson(raw)
     assert.ok(brief !== null, `brief should not be null for ${value}`)
