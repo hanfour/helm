@@ -24,7 +24,13 @@ const FAKE = {
   swiftbarInstalled: true,
   ubersichtInstalled: true,
 }
-const CHECK_DEPS = { ...FAKE, swiftbarInstalled: true, ubersichtInstalled: true }
+// *Running 跟 *Installed 一樣要注入，否則 doctor 的測試會隨這台機器此刻有沒有
+// 開那兩個 app 而時綠時紅。
+const CHECK_DEPS = {
+  ...FAKE,
+  swiftbarInstalled: true, ubersichtInstalled: true,
+  swiftbarRunning: true, ubersichtRunning: true,
+}
 
 test('沒安裝過時回 1 並指出缺什麼', () => {
   const r = captureSync(scaffoldHome([]), () => runDoctor([], CHECK_DEPS))

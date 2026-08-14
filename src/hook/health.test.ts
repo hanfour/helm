@@ -80,6 +80,10 @@ const checksOf = (home: string, b = board(), extra: CheckDeps = {}) =>
     ubersicht: NO_PREFS,
     swiftbarInstalled: true,
     ubersichtInstalled: true,
+    // 跟 *Installed 同一個理由：不注入的話，測試會隨這台機器此刻有沒有開
+    // 那兩個 app 而時綠時紅。個別測試仍可用 extra 覆寫。
+    swiftbarRunning: true,
+    ubersichtRunning: true,
     ...extra,
   })
 
