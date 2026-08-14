@@ -1,6 +1,6 @@
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { resolvePaths } from '../paths.ts'
@@ -137,4 +137,40 @@ test('沒有釘選的專案超過 14 天沒活動就不列出 —— 窗口本�
   utimesSync(transcript, longAgo, longAgo)
 
   assert.deepEqual(collectStatus(resolvePaths({ home }), NOW, () => ({ alive: new Map(), unreachable: new Set<number>() })).projects, [])
+})
+
+test('collectStatus 真的把任務狀態接到每個呈現面看得到的 session 上', () => {
+  // task-status-of.test.ts 只測 attachTaskStatus 這個函式本身，測不到
+  // collectStatus 有沒有真的呼叫它 —— 那一行接線是功能送到每個呈現面的
+  // 唯一交付點，得從 collectStatus 這一層驗證。
+  const { home, cwd } = scaffold()
+  const dir = join(home, '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'))
+  mkdirSync(dir, { recursive: true })
+  const transcript = join(dir, 'sess-live.jsonl')
+  writeFileSync(transcript, '{}\n')
+  const { size, mtimeMs } = statSync(transcript)
+
+  mkdirSync(join(home, '.helm'), { recursive: true })
+  writeFileSync(
+    join(home, '.helm', 'cache.json'),
+    JSON.stringify({
+      version: 1,
+      briefs: {
+        'sess-live': {
+          digest: `${size}:${mtimeMs}`,
+          generatedAt: NOW,
+          gitBranch: null,
+          body: {
+            goal: '', done: [], currentStep: '', nextStep: '', blockers: [], files: [], prs: [],
+            taskStatus: 'blocked',
+          },
+        },
+      },
+      prs: {},
+      projects: {},
+    }),
+  )
+
+  const out = collectStatus(resolvePaths({ home }), NOW, () => ({ alive: new Map(), unreachable: new Set<number>() }))
+  assert.equal(out.projects[0]?.sessions[0]?.taskStatus, 'blocked')
 })

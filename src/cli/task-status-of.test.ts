@@ -72,6 +72,18 @@ test('快取讀不到時整批回 null，不讓看板其餘部分受影響', () 
   assert.equal(out[0]?.taskStatus, null)
 })
 
+test('busy 的 session 即使 digest 相符也不掛任務狀態', () => {
+  // §4.3 最後一列：session 還在跑，`helm brief` 支援對它產生簡報，一個活著
+  // 但閒置、transcript 沒變動的 session 會讓 digest 相符，但簡報只是上一次
+  // 的結論，可能已經不準，不能顯示。
+  const out = attachTaskStatus(
+    [sess({ sessionId: 'a', lifecycle: 'running', nativeStatus: 'busy' })],
+    '/c',
+    deps(cacheWith({ a: entry() })),
+  )
+  assert.equal(out[0]?.taskStatus, null)
+})
+
 test('不修改輸入', () => {
   const input = [sess({ sessionId: 'a' })]
   const snapshot = structuredClone(input)
