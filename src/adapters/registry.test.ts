@@ -7,7 +7,7 @@ const state = (over: Partial<SessionState>): SessionState => ({
   adapterId: 'x', sessionId: 's', cwd: '/p', pid: null, procStart: null,
   startedAt: 0, updatedAt: 0, nativeStatus: null, kind: 'interactive', name: '',
   transcriptPath: null, transcriptMtimeMs: null, lifecycle: 'running',
-  lifecycleConfidence: 'high', live: null, ...over,
+  lifecycleConfidence: 'high', live: null, taskStatus: null, ...over,
 })
 
 const adapter = (id: string, result: () => AdapterResult): Adapter => ({ id, collect: result })

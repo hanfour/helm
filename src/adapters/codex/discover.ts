@@ -134,6 +134,9 @@ export function discoverCodex(opts: CodexOptions, deps: CodexDeps): CodexResult 
       // Live markers come from the PreToolUse hook, which Codex has no
       // equivalent of.
       live: null,
+      // adapter 產不出這個值（它來自簡報快取），所以一律填 null，由
+      // attachTaskStatus 在 collectStatus 裡補上。
+      taskStatus: null,
     }]
   })
 

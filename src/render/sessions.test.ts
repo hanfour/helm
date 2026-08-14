@@ -12,7 +12,7 @@ const sess = (over: Partial<SessionState>): SessionState => ({
   cwd: '/Users/testuser/proj', pid: 1, procStart: null, startedAt: 0,
   updatedAt: NOW - 5 * 60_000, nativeStatus: 'idle', kind: 'interactive',
   name: 'proj-01', transcriptPath: null, transcriptMtimeMs: null, lifecycle: 'running',
-  lifecycleConfidence: 'high', live: null, ...over,
+  lifecycleConfidence: 'high', live: null, taskStatus: null, ...over,
 })
 
 const proj = (over: Partial<ProjectView>): ProjectView => {

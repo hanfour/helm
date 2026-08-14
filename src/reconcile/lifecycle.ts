@@ -106,7 +106,15 @@ export function reconcileSessions(
       // here doubled the syscalls on a path `helm menu` runs every 5 seconds.
       transcriptMtimeMs: mtimeOf(s, deps),
     })
-    return { ...s, lifecycle: verdict.lifecycle, lifecycleConfidence: verdict.confidence, live }
+    return {
+      ...s,
+      lifecycle: verdict.lifecycle,
+      lifecycleConfidence: verdict.confidence,
+      live,
+      // adapter 產不出這個值（它來自簡報快取），所以一律填 null，由
+      // attachTaskStatus 在 collectStatus 裡補上。
+      taskStatus: null,
+    }
   })
 }
 

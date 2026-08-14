@@ -29,7 +29,7 @@ const sess = (over: Partial<SessionState> & { sessionId: string }): SessionState
   adapterId: 'claude-code', cwd: '/p/a', pid: null, procStart: null, startedAt: 0,
   updatedAt: NOW - 5 * 60_000, nativeStatus: 'idle', kind: 'interactive', name: '',
   transcriptPath: null, transcriptMtimeMs: null, lifecycle: 'running',
-  lifecycleConfidence: 'high', live: null, ...over,
+  lifecycleConfidence: 'high', live: null, taskStatus: null, ...over,
 })
 
 /**

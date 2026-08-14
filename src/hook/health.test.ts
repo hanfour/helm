@@ -22,7 +22,7 @@ const sess = (over: Partial<SessionState>): SessionState => ({
   adapterId: 'claude-code', sessionId: 's', cwd: '/p', pid: null, procStart: null,
   startedAt: 0, updatedAt: NOW, nativeStatus: null, kind: 'interactive', name: '',
   transcriptPath: null, transcriptMtimeMs: null, lifecycle: 'ended_clean',
-  lifecycleConfidence: 'high', live: null, ...over,
+  lifecycleConfidence: 'high', live: null, taskStatus: null, ...over,
 })
 
 const board = (

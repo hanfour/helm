@@ -7,7 +7,7 @@ const s = (over: Partial<SessionState>): SessionState => ({
   adapterId: 'claude-code', sessionId: 'x', cwd: '/p', pid: 1, procStart: null,
   startedAt: 0, updatedAt: 0, nativeStatus: null, kind: 'interactive', name: '',
   transcriptPath: null, transcriptMtimeMs: null, lifecycle: 'running', lifecycleConfidence: 'high',
-  live: null, ...over,
+  live: null, taskStatus: null, ...over,
 })
 
 test('running + busy → busy', () => {

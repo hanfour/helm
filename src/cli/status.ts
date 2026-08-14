@@ -15,6 +15,7 @@ import { readPrefs } from '../projects/prefs.ts'
 import { reconcileSessions } from '../reconcile/lifecycle.ts'
 import { readLiveMarker } from '../reconcile/live.ts'
 import { renderTable } from '../render/table.ts'
+import { attachTaskStatus } from './task-status-of.ts'
 import type { PrefsIO } from '../hook/defaults.ts'
 import { defaultSwiftBarDeps } from '../hook/swiftbar.ts'
 import { defaultUbersichtDeps } from '../hook/ubersicht.ts'
@@ -68,7 +69,10 @@ export function collectStatus(
     },
   ])
 
-  const projects = groupIntoProjects(states, {
+  // 掛在分組之前，這樣每個呈現面拿到的 session 都已經帶著任務狀態。
+  const withTask = attachTaskStatus(states, paths.cacheFile)
+
+  const projects = groupIntoProjects(withTask, {
     prefs,
     nowMs,
     cwdExists: existsSync,
