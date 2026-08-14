@@ -1,3 +1,4 @@
+import { taskLabelOf } from '../task-status.ts'
 import type { Brief } from '../cache/store.ts'
 
 export interface BriefMeta {
@@ -8,12 +9,15 @@ export interface BriefMeta {
 }
 
 export function renderBriefMarkdown(brief: Brief, meta: BriefMeta): string {
+  const task = taskLabelOf(brief.taskStatus)
   return [
     `# 交接簡報 — ${meta.cwd}`,
     '',
     `- Session：\`${meta.sessionId}\``,
     `- 分支：${meta.gitBranch ?? '（未知）'}`,
     `- 產生時間：${new Date(meta.generatedAt).toISOString()}`,
+    // 舊簡報沒有這個欄位，那時不多一行空的出來。
+    ...(task === null ? [] : [`- 任務狀態：${task}`]),
     '',
     '## 目標',
     orNone([brief.goal]),

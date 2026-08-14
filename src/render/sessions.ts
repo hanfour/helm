@@ -1,5 +1,6 @@
 import type { ProjectView } from '../projects/group.ts'
 import { UNEARNED_LABEL, isUnearnedClaim, statusOf, type StatusKey } from '../session-status.ts'
+import { taskLabelOf } from '../task-status.ts'
 import type { SessionState } from '../types.ts'
 import { dim, glyph, relativeTime } from './glyphs.ts'
 import type { RenderOptions } from './table.ts'
@@ -38,7 +39,13 @@ function renderSession(s: SessionState, opts: RenderOptions): string {
     padTo(s.sessionId.slice(0, SHORT_ID), SHORT_ID),
     relativeTime(s.updatedAt, opts.nowMs),
   ].join('  ')
-  return `${head}${liveSuffix(s)}${resumeHint(s, key, opts)}`
+  return `${head}${taskSuffix(s)}${liveSuffix(s)}${resumeHint(s, key, opts)}`
+}
+
+/** 只有問過的 session 才有這一段。沒問過的不畫空欄位。 */
+function taskSuffix(s: SessionState): string {
+  const label = taskLabelOf(s.taskStatus)
+  return label === null ? '' : `  ${label}`
 }
 
 /** The live marker only means anything while the session is actually working. */

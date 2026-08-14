@@ -5,6 +5,7 @@ import { renderTable } from './render/table.ts'
 import { renderSessions } from './render/sessions.ts'
 import { buildWidget } from './hook/widget.ts'
 import { UNEARNED_LABEL, isUnearnedClaim, statusOf } from './session-status.ts'
+import { taskLabelOf } from './task-status.ts'
 import type { Board } from './board.ts'
 import type { ProjectView } from './projects/group.ts'
 import type { SessionState } from './types.ts'
@@ -29,7 +30,7 @@ const sess = (over: Partial<SessionState> & { sessionId: string }): SessionState
   adapterId: 'claude-code', cwd: '/p/a', pid: null, procStart: null, startedAt: 0,
   updatedAt: NOW - 5 * 60_000, nativeStatus: 'idle', kind: 'interactive', name: '',
   transcriptPath: null, transcriptMtimeMs: null, lifecycle: 'running',
-  lifecycleConfidence: 'high', live: null, ...over,
+  lifecycleConfidence: 'high', live: null, taskStatus: null, ...over,
 })
 
 /**
@@ -46,6 +47,9 @@ const SESSIONS: SessionState[] = [
   sess({ sessionId: 'crshlow_', lifecycle: 'crashed', adapterId: 'codex', lifecycleConfidence: 'low' }),
   sess({ sessionId: 'endehigh', lifecycle: 'ended_clean' }),
   sess({ sessionId: 'endelow_', lifecycle: 'ended_clean', adapterId: 'codex', lifecycleConfidence: 'low' }),
+  sess({ sessionId: 'taskdone', lifecycle: 'ended_clean', taskStatus: 'done' }),
+  sess({ sessionId: 'taskprog', lifecycle: 'crashed', taskStatus: 'in_progress' }),
+  sess({ sessionId: 'taskblok', lifecycle: 'ended_clean', taskStatus: 'blocked' }),
 ]
 
 const project: ProjectView = {
@@ -152,4 +156,33 @@ test('標題帶問號時，摘要對同一個詞也帶問號', () => {
   const summary = table().split('\n').find((l) => l.includes('個專案')) ?? ''
   assert.equal(title.endsWith('?'), /已中斷 \d+\?/.test(summary),
     `標題「${title}」與摘要「${summary}」對不確定性的說法不一致`)
+})
+
+test('任務狀態在選單列與 helm sessions 用同一個詞', () => {
+  const m = menu()
+  const s = sessions()
+  for (const session of SESSIONS) {
+    const want = taskLabelOf(session.taskStatus)
+    const inMenu = lineWith(m, session.sessionId)
+    const inSessions = lineWith(s, session.sessionId)
+    if (want === null) {
+      assert.doesNotMatch(inMenu, /任務/, `選單列對沒問過的 ${session.sessionId} 畫了東西：${inMenu}`)
+      assert.doesNotMatch(inSessions, /任務/, `helm sessions 同上：${inSessions}`)
+      continue
+    }
+    assert.ok(inMenu.includes(want), `選單列對 ${session.sessionId} 用的不是「${want}」：${inMenu}`)
+    assert.ok(inSessions.includes(want), `helm sessions 對 ${session.sessionId} 用的不是「${want}」：${inSessions}`)
+  }
+})
+
+test('helm status 與桌面標題都不畫任務狀態', () => {
+  // 上一條測試守的是「兩個面用同一個詞」；這條守的是另一半——「另外兩個面
+  // 什麼都不畫」。render/table.ts 是一個專案一列的整案（見該檔開頭的說明），
+  // task status 是單一 session 的判斷，塞進整案列會是哪個 session 的？桌面
+  // 標題同理，只算行程狀態的數量。SESSIONS 裡已經有帶 taskStatus 的 session
+  // （taskdone / taskprog / taskblok），沒有守住的話這裡不會發現。
+  const t = table()
+  const title = widgetTitle()
+  assert.doesNotMatch(t, /任務/, `helm status 不該畫任務狀態：${t}`)
+  assert.doesNotMatch(title.word, /任務/, `桌面標題不該畫任務狀態：${title.word}`)
 })

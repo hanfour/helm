@@ -2,6 +2,7 @@ import type { Board } from '../board.ts'
 import type { ProjectView } from '../projects/group.ts'
 import { ACTIVITY_WINDOW_DAYS } from '../projects/include.ts'
 import { isUnearnedClaim, statusOf, UNEARNED_LABEL, type StatusKey } from '../session-status.ts'
+import { taskLabelOf } from '../task-status.ts'
 import type { SessionState } from '../types.ts'
 import { relativeTime } from './glyphs.ts'
 
@@ -189,12 +190,18 @@ function renderSession(s: SessionState, opts: MenuOptions): string[] {
   const mark = `${SHAPE[key]}${s.lifecycleConfidence === 'low' ? '?' : ''}`
   const label = isUnearnedClaim(s) ? UNEARNED_LABEL : LABEL[key]
   return [
-    `--${mark} ${label}  ${short}  ${relativeTime(s.updatedAt, opts.nowMs)}${liveSuffix(s)}`,
+    `--${mark} ${label}  ${short}  ${relativeTime(s.updatedAt, opts.nowMs)}${taskSuffix(s)}${liveSuffix(s)}`,
     `----開終端機接續 | bash="${opts.helmBin}" param1=open param2=-- param3=${param(short)} terminal=false refresh=true`,
     // Generating a brief takes the measured 57-86 s, so it opens a terminal
     // where the user can watch it rather than appearing to hang the menu.
     `----看交接簡報 | bash="${opts.helmBin}" param1=brief param2=-- param3=${param(short)} terminal=true`,
   ]
+}
+
+/** 與 helm sessions 同一個詞、同一個「沒有就不畫」的規則。 */
+function taskSuffix(s: SessionState): string {
+  const label = taskLabelOf(s.taskStatus)
+  return label === null ? '' : `  ${clean(label)}`
 }
 
 /** The one thing no file on disk can tell us — what the session is doing right now. */

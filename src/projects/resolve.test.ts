@@ -8,7 +8,7 @@ const sess = (over: Partial<SessionState>): SessionState => ({
   adapterId: 'claude-code', sessionId: 'aaaaaaaa-1111-2222-3333-444444444444',
   cwd: '/Users/u/proj', pid: null, procStart: null, startedAt: 0, updatedAt: 0,
   nativeStatus: null, kind: 'interactive', name: '', transcriptPath: null, transcriptMtimeMs: null,
-  lifecycle: 'ended_clean', lifecycleConfidence: 'high', live: null, ...over,
+  lifecycle: 'ended_clean', lifecycleConfidence: 'high', live: null, taskStatus: null, ...over,
 })
 
 /** Distinct per project, so a session-id test can only match what it names. */

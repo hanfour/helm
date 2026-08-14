@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { parseBriefJson, generateBrief } from './brief.ts'
 import type { SummaryInput } from './input.ts'
+import { TASK_STATUSES } from '../task-status.ts'
 
 const INPUT: SummaryInput = {
   sessionId: 's1', cwd: '/p', gitBranch: 'main',
@@ -67,4 +68,41 @@ test('runner 拋錯時回傳 null 而不向上拋', async () => {
 
 test('runner 回傳無法解析的內容時回傳 null', async () => {
   assert.equal(await generateBrief(INPUT, async () => '???'), null)
+})
+
+test('三個合法的 taskStatus 都解析得出來', () => {
+  for (const value of TASK_STATUSES) {
+    const raw = JSON.stringify({ goal: 'g', taskStatus: value })
+    const brief = parseBriefJson(raw)
+    assert.ok(brief !== null, `brief should not be null for ${value}`)
+    assert.equal(brief?.goal, 'g', `goal should survive parsing for ${value}`)
+    assert.equal(brief?.taskStatus, value, value)
+  }
+})
+
+test('taskStatus 是模型自己編的值時視為未知，不猜一個', () => {
+  // 「完成了」「finished」這種回答不能硬塞進三個值之一。猜錯的方向是
+  // 把沒做完的說成做完了。整份解析必須成功，只有 taskStatus 欄位失效。
+  const raw = JSON.stringify({ goal: 'g', taskStatus: '完成了' })
+  const brief = parseBriefJson(raw)
+  assert.ok(brief !== null, 'entire brief should parse successfully')
+  assert.equal(brief?.goal, 'g', 'goal should survive invalid taskStatus')
+  assert.equal(brief?.taskStatus, undefined, 'invalid taskStatus should be undefined')
+})
+
+test('taskStatus 型別錯誤時視為未知，其餘欄位照常解析', () => {
+  // 數字或其他型別的 taskStatus 應該被 catch 為 undefined，而不是整份解析失敗
+  const raw = JSON.stringify({ goal: 'g', taskStatus: 42 })
+  const brief = parseBriefJson(raw)
+  assert.ok(brief !== null, 'entire brief should parse successfully with type mismatch')
+  assert.equal(brief?.goal, 'g', 'goal should survive taskStatus type error')
+  assert.equal(brief?.taskStatus, undefined, 'taskStatus type mismatch should be undefined')
+})
+
+test('舊快取沒有 taskStatus 欄位時其餘欄位照常解析', () => {
+  const raw = JSON.stringify({ goal: 'g', nextStep: 'n' })
+  const brief = parseBriefJson(raw)
+  assert.ok(brief !== null, 'entire brief should parse when taskStatus is missing')
+  assert.equal(brief?.goal, 'g', 'goal should be present')
+  assert.equal(brief?.taskStatus, undefined, 'missing taskStatus should be undefined')
 })

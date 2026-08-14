@@ -105,12 +105,14 @@ test('helm menu 的 import 圖裡沒有任何慢速路徑模組', () => {
   //
   // 真正對得上這條 invariant 的是 import 圖本身。慢速路徑的模組只要被
   // menu 這一側碰到，這裡就會紅。
+  // cache/store.ts 不在清單裡：task-status 設計文件 §6 明白把讀一次 7 KB
+  // 的 cache.json 劃進快速路徑的效能預算內，跟這裡量的 200ms 走同一個契約，
+  // 不是被漏掉的慢速模組。
   const forbidden = [
     'adapters/claude-code/transcript.ts',
     'summarize/brief.ts',
     'summarize/input.ts',
     'summarize/git.ts',
-    'cache/store.ts',
     'launch/run.ts',
   ]
   const reachable = importGraphOf(fileURLToPath(new URL('./menu.ts', import.meta.url)))

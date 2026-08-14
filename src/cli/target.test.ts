@@ -8,7 +8,7 @@ const sess = (id: string, updatedAt = 0): SessionState => ({
   adapterId: 'claude-code', sessionId: id, cwd: '/p', pid: null, procStart: null,
   startedAt: 0, updatedAt, nativeStatus: null, kind: 'interactive', name: '',
   transcriptPath: null, transcriptMtimeMs: null, lifecycle: 'ended_clean', lifecycleConfidence: 'high',
-  live: null,
+  live: null, taskStatus: null,
 })
 
 const proj = (name: string, sessions: SessionState[]): ProjectView => ({

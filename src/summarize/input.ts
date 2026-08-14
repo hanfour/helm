@@ -38,10 +38,11 @@ const FIELDS = `{
   "goal":        "這個 session 想達成什麼（一句話）",
   "done":        ["已經完成的事，每項一句"],
   "currentStep": "中斷當下正在做的那一步",
-  "nextStep":    "回來後應該做的下一件事（具體到可以直接動手）",
+  "nextStep":    "回來後應該做的下一件事；已經做完就留空字串",
   "blockers":    ["卡住的地方；沒有就空陣列"],
   "files":       ["相關檔案路徑"],
-  "prs":         ["相關的 PR 編號或網址；沒有就空陣列"]
+  "prs":         ["相關的 PR 編號或網址；沒有就空陣列"],
+  "taskStatus":  "done（這件事已經做完了，沒有下一步）／in_progress（還在做）／blocked（被 blockers 裡的東西擋住）"
 }`
 
 /**
@@ -72,7 +73,7 @@ export function renderSummaryPrompt(input: SummaryInput): string {
     '只輸出一個 JSON 物件，不要有任何其他文字、不要用 markdown 程式碼圍欄。欄位如下：',
     FIELDS,
     '',
-    '用繁體中文台灣用語填寫。「下一步」要具體到開發者看完就知道該動哪個檔案。',
+    '用繁體中文台灣用語填寫。「下一步」要具體到開發者看完就知道該動哪個檔案；如果這件事已經做完了，nextStep 留空字串並把 taskStatus 填 done，不要為了填滿欄位編一個下一步。',
   ].join('\n')
 }
 

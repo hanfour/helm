@@ -13,7 +13,7 @@ const sess = (over: Partial<SessionState>): SessionState => ({
   cwd: '/u/proj', pid: 1, procStart: null, startedAt: 0, updatedAt: NOW - 5 * 60_000,
   nativeStatus: 'idle', kind: 'interactive', name: '', transcriptPath: null,
   transcriptMtimeMs: null, lifecycle: 'running', lifecycleConfidence: 'high',
-  live: null, ...over,
+  live: null, taskStatus: null, ...over,
 })
 
 const proj = (over: Partial<ProjectView> = {}): ProjectView => {
@@ -619,4 +619,25 @@ test('高信心的已結束照樣講「已結束」', () => {
     sessions: [sess({ lifecycle: 'ended_clean', lifecycleConfidence: 'high' })],
   })]), OPTS)
   assert.match(body(out), /已結束/)
+})
+
+test('選單列的 session 列也顯示任務狀態', () => {
+  const out = renderSwiftBar(board([proj({
+    sessions: [sess({ lifecycle: 'ended_clean', taskStatus: 'done' })],
+  })]), OPTS)
+  const line = body(out).split('\n').find((l) => l.includes('abcdef12')) ?? ''
+  assert.match(line, /任務完成/, line)
+})
+
+test('選單列沒有任務狀態時不多出分隔空白', () => {
+  const out = renderSwiftBar(board([proj({
+    sessions: [sess({ lifecycle: 'ended_clean', taskStatus: null })],
+  })]), OPTS)
+  const line = body(out).split('\n').find((l) => l.includes('abcdef12')) ?? ''
+  assert.doesNotMatch(line, /任務/, line)
+  assert.doesNotMatch(line, / {3}/, `多出連續空白：${JSON.stringify(line)}`)
+  // / {3}/ 只抓得到三個以上連續空白，taskSuffix 回傳兩個空格的殘留（例如把
+  // '' 錯改成 '  '）會補在這一列結尾，doesNotMatch 那條看不出來 —— sessions.ts
+  // 那邊已經吃過這個虧（見 sessions.test.ts 的 trimEnd 斷言），這裡補上同一種。
+  assert.equal(line, line.trimEnd(), `結尾有多餘空白：${JSON.stringify(line)}`)
 })

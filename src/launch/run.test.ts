@@ -11,7 +11,7 @@ const session = (over: Partial<SessionState> = {}): SessionState => ({
   adapterId: 'claude-code', sessionId: 'sess-1', cwd: '/Users/t/proj', pid: null,
   procStart: null, startedAt: 0, updatedAt: 0, nativeStatus: null,
   kind: 'interactive', name: '', transcriptPath: null, transcriptMtimeMs: null,
-  lifecycle: 'ended_clean', lifecycleConfidence: 'high', live: null, ...over,
+  lifecycle: 'ended_clean', lifecycleConfidence: 'high', live: null, taskStatus: null, ...over,
 })
 
 test('briefPathFor 以 session id 命名檔案', () => {

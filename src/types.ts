@@ -1,3 +1,5 @@
+import type { TaskStatus } from './task-status.ts'
+
 export type Lifecycle = 'running' | 'ended_clean' | 'crashed'
 export type Confidence = 'high' | 'low'
 export type NativeStatus = 'busy' | 'idle'
@@ -56,4 +58,11 @@ export interface SessionState extends DiscoveredSession {
   lifecycle: Lifecycle
   lifecycleConfidence: Confidence
   live: LiveMarker | null
+  /**
+   * 從交接簡報來的任務狀態，未知時為 null。
+   *
+   * adapter 產不出這個值（它來自簡報快取），所以 adapter 一律填 null，
+   * 由 `attachTaskStatus` 在 collectStatus 裡補上。
+   */
+  taskStatus: TaskStatus | null
 }

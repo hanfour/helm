@@ -9,7 +9,7 @@ const sess = (over: Partial<SessionState>): SessionState => ({
   adapterId: 'claude-code', sessionId: 's', cwd: '/Users/testuser/a', pid: 1,
   procStart: null, startedAt: 0, updatedAt: NOW - 1000, nativeStatus: 'idle',
   kind: 'interactive', name: '', transcriptPath: null, transcriptMtimeMs: null,
-  lifecycle: 'running', lifecycleConfidence: 'high', live: null, ...over,
+  lifecycle: 'running', lifecycleConfidence: 'high', live: null, taskStatus: null, ...over,
 })
 
 const deps = {
