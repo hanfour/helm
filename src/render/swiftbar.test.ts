@@ -604,9 +604,14 @@ test('低信心的「已結束」不能講得像確定的 —— helm 其實不�
   // lifecycle.ts 借用 ended_clean 表示「helm 停止猜測」，理由是它在 UI 上
   // 的效果是「不畫點」。但那只描述了三個呈現面裡的一個：選單列、
   // helm sessions、helm status 都直接印出「已結束」這個詞，而那是宣稱。
+  // 專案裡放一個還活著的 session，這樣它不會被收進「其他 N 個專案」——
+  // 被收起來的專案不畫 session 列，那條路徑就驗不到這件事了。
   const out = renderSwiftBar(board([proj({
-    aggregateStatus: null,
-    sessions: [sess({ adapterId: 'codex', lifecycle: 'ended_clean', lifecycleConfidence: 'low' })],
+    aggregateStatus: 'idle',
+    sessions: [
+      sess({ nativeStatus: 'idle' }),
+      sess({ sessionId: 'codexlow-0000-0000-0000-000000000000', adapterId: 'codex', lifecycle: 'ended_clean', lifecycleConfidence: 'low' }),
+    ],
   })]), OPTS)
   const line = body(out).split('\n').find((l) => l.includes('●?')) ?? ''
   assert.doesNotMatch(line, /已結束/, `低信心不該講「已結束」：${line}`)
@@ -614,9 +619,13 @@ test('低信心的「已結束」不能講得像確定的 —— helm 其實不�
 })
 
 test('高信心的已結束照樣講「已結束」', () => {
+  // 同上：專案要有活著的 session 才不會被收起來。
   const out = renderSwiftBar(board([proj({
-    aggregateStatus: null,
-    sessions: [sess({ lifecycle: 'ended_clean', lifecycleConfidence: 'high' })],
+    aggregateStatus: 'idle',
+    sessions: [
+      sess({ nativeStatus: 'idle' }),
+      sess({ sessionId: 'endedhigh-0000-0000-0000-00000000', lifecycle: 'ended_clean', lifecycleConfidence: 'high' }),
+    ],
   })]), OPTS)
   assert.match(body(out), /已結束/)
 })
@@ -640,4 +649,81 @@ test('選單列沒有任務狀態時不多出分隔空白', () => {
   // '' 錯改成 '  '）會補在這一列結尾，doesNotMatch 那條看不出來 —— sessions.ts
   // 那邊已經吃過這個虧（見 sessions.test.ts 的 trimEnd 斷言），這裡補上同一種。
   assert.equal(line, line.trimEnd(), `結尾有多餘空白：${JSON.stringify(line)}`)
+})
+
+test('全部結束的專案收進「其他 N 個專案」，不佔第一層', () => {
+  // 實測 2026-08-14：選單第一層 11 列裡有 7 列底下每個 session 都已結束。
+  // 那些列在 SwiftBar 上是灰的，佔掉大部分高度而使用者不會點。
+  const out = body(renderSwiftBar(board([
+    proj({ name: 'alive', path: '/a', aggregateStatus: 'busy', sessions: [sess({ nativeStatus: 'busy' })] }),
+    proj({ name: 'donea', path: '/b', aggregateStatus: null, sessions: [sess({ lifecycle: 'ended_clean' })] }),
+    proj({ name: 'doneb', path: '/c', aggregateStatus: null, sessions: [sess({ lifecycle: 'ended_clean' })] }),
+  ]), OPTS))
+  assert.match(out, /^alive {2}/m, '有活動的專案要留在第一層')
+  assert.doesNotMatch(out, /^donea/m, '全部結束的不該在第一層')
+  assert.doesNotMatch(out, /^doneb/m)
+  assert.match(out, /^其他 2 個專案$/m)
+  assert.match(out, /^--donea {2}/m, '收起來的要在子選單裡')
+  assert.match(out, /^--doneb {2}/m)
+})
+
+test('收起來的專案那一列可點，開終端機看它的 session', () => {
+  // 那些專案底下的 session 仍然可以 resume（規格 §9）。收起來不能等於斷了路。
+  const out = body(renderSwiftBar(board([
+    proj({ name: 'done', aggregateStatus: null, sessions: [sess({ lifecycle: 'ended_clean' })] }),
+  ]), OPTS))
+  const line = out.split('\n').find((l) => l.startsWith('--done')) ?? ''
+  assert.match(line, /param1=sessions param2=-- param3="done"/, line)
+  assert.match(line, /terminal=true/, line)
+})
+
+test('收起來的專案保留任務狀態 —— 那正是「結束了但沒做完」', () => {
+  const out = body(renderSwiftBar(board([
+    proj({
+      name: 'done', aggregateStatus: null,
+      sessions: [sess({ lifecycle: 'ended_clean', taskStatus: 'blocked' })],
+    }),
+  ]), OPTS))
+  assert.match(out.split('\n').find((l) => l.startsWith('--done')) ?? '', /任務卡住/)
+})
+
+test('沒有全部結束的專案時不畫「其他」那一列', () => {
+  const out = body(renderSwiftBar(board([
+    proj({ name: 'alive', aggregateStatus: 'busy', sessions: [sess({ nativeStatus: 'busy' })] }),
+  ]), OPTS))
+  assert.doesNotMatch(out, /其他/)
+})
+
+test('中斷的專案不會被收起來 —— 那是最不該藏的東西', () => {
+  // aggregateStatus 為 crashed 不是 null，所以規則本身就擋住了。這條測試
+  // 存在是因為「收起沒在跑的」跟「收起全部結束的」只差一個字，改錯很容易。
+  const out = body(renderSwiftBar(board([
+    proj({ name: 'crashed', aggregateStatus: 'crashed', sessions: [sess({ lifecycle: 'crashed' })] }),
+  ]), OPTS))
+  assert.match(out, /^crashed {2}/m)
+  assert.doesNotMatch(out, /其他/)
+})
+
+test('全部專案都結束時，第一層只剩那一列，不是「沒有符合條件的專案」', () => {
+  const out = body(renderSwiftBar(board([
+    proj({ name: 'done', aggregateStatus: null, sessions: [sess({ lifecycle: 'ended_clean' })] }),
+  ]), OPTS))
+  assert.match(out, /^其他 1 個專案$/m)
+  assert.doesNotMatch(out, /沒有符合條件/)
+})
+
+test('收合的列上，重複的任務狀態只講一次', () => {
+  // 一個專案底下兩個 session 都卡在同一件事時，「任務卡住・任務卡住」
+  // 是同一句話講兩遍，而那一列的寬度是有限的。
+  const out = body(renderSwiftBar(board([
+    proj({
+      name: 'done', aggregateStatus: null,
+      sessions: [
+        sess({ lifecycle: 'ended_clean', taskStatus: 'blocked' }),
+        sess({ sessionId: 'second00-0000-0000-0000-000000000000', lifecycle: 'ended_clean', taskStatus: 'blocked' }),
+      ],
+    }),
+  ]), OPTS))
+  const line = out.split('\n').find((l) => l.startsWith('--done')) ?? ''
+  assert.equal((line.match(/任務卡住/g) ?? []).length, 1, line)
 })

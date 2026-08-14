@@ -110,8 +110,58 @@ function renderBody(board: Board, opts: MenuOptions): string[] {
   // two answers — which is worse than either being incomplete.
   const rows = board.projects.length === 0
     ? [`沒有符合條件的專案（近 ${ACTIVITY_WINDOW_DAYS} 天內有活動且是 git repo）`]
-    : board.projects.flatMap((p) => renderProject(p, opts))
+    : [
+      ...board.projects.filter(isLive).flatMap((p) => renderProject(p, opts)),
+      ...renderFinished(board.projects.filter((p) => !isLive(p)), opts),
+    ]
   return [...rows, ...renderPrs(board, opts), ...warnings]
+}
+
+/** Null means every session below has ended — see `aggregateStatus`. */
+function isLive(p: ProjectView): boolean {
+  return p.aggregateStatus !== null
+}
+
+/**
+ * Projects with nothing left running, folded into one row.
+ *
+ * Measured 2026-08-14: 7 of the menu's 11 top-level rows were projects where
+ * every session had ended. They take most of the dropdown's height and are
+ * the rows the user never clicks.
+ *
+ * Folding is not hiding: the count is stated, and each row still opens
+ * `helm sessions` so the sessions underneath stay reachable — they remain
+ * resumable (spec §9), and one of them here still carries 「任務進行中」.
+ *
+ * A crashed project has `aggregateStatus: 'crashed'`, never null, so it can
+ * never be folded. That is the whole reason the test for it exists: 「收起沒
+ * 在跑的」and 「收起全部結束的」differ by one word, and only one of them is
+ * safe.
+ *
+ * Two levels deep, like everything else here. SwiftBar's plugin API comes
+ * from BitBar/xbar and a third level is likely fine, but nothing on this
+ * machine could verify it, so the shape does not depend on it.
+ */
+function renderFinished(projects: readonly ProjectView[], opts: MenuOptions): string[] {
+  if (projects.length === 0) return []
+  return [
+    '---',
+    `其他 ${projects.length} 個專案`,
+    ...projects.map((p) =>
+      `--${label(p.name)}  ${relativeTime(p.lastActivityMs, opts.nowMs)}${taskSummary(p)}`
+      + ` | bash="${opts.helmBin}" param1=sessions param2=-- param3=${param(p.name)} terminal=true`),
+  ]
+}
+
+/**
+ * What the folded row still says about unfinished work.
+ *
+ * A session whose process ended but whose task did not is exactly what this
+ * row would otherwise bury.
+ */
+function taskSummary(p: ProjectView): string {
+  const labels = [...new Set(p.sessions.flatMap((s) => taskLabelOf(s.taskStatus) ?? []))]
+  return labels.length === 0 ? '' : `  ${clean(labels.join('・'))}`
 }
 
 /** Degradation must be visible here too, not only in the terminal view. */
