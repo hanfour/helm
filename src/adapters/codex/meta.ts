@@ -2,10 +2,16 @@ import { closeSync, openSync, readSync, readFileSync, renameSync, writeFileSync 
 import { isAbsolute } from 'node:path'
 import type { RolloutFile } from './scan.ts'
 
-/** The only two fields helm takes from a rollout's `session_meta`. */
+/** The only three fields helm takes from a rollout's `session_meta`. */
 export interface RolloutMeta {
   sessionId: string
   cwd: string
+  /**
+   * A `codex exec` batch run rather than an interactive session. Decides
+   * whether an interrupted run is worth calling 「中斷」 — see
+   * `decideCodexLifecycle`.
+   */
+  isExec: boolean
 }
 
 /**
@@ -46,7 +52,15 @@ export function readMeta(path: string): RolloutMeta | null {
   // happened to be run from.
   if (typeof cwd !== 'string' || !isAbsolute(cwd)) return null
 
-  return { sessionId, cwd }
+  // Measured 2026-08-14: present as a string in all 196 rollouts here, spanning
+  // four months of Codex releases, with exactly two values — `codex_exec` and
+  // `codex-tui`. Unlike `session_id` and `cwd` it is not load-bearing, so a
+  // future release dropping it degrades to `false`, which is the conservative
+  // direction: an unknown session keeps being eligible for 「中斷」.
+  const originator = payload['originator']
+  const isExec = typeof originator === 'string' && originator.includes('exec')
+
+  return { sessionId, cwd, isExec }
 }
 
 /**
@@ -150,8 +164,15 @@ function readCache(file: string): Record<string, RolloutMeta> {
     // Nulls from an older helm are dropped on read: they are exactly the
     // permanently-lost sessions this cache used to create.
     if (!isRecord(value)) continue
-    const { sessionId, cwd } = value
-    if (typeof sessionId === 'string' && typeof cwd === 'string') out[key] = { sessionId, cwd }
+    const { sessionId, cwd, isExec } = value
+    // `isExec` is required, so entries written by an older helm are dropped
+    // and re-read from the rollout. Defaulting them to `false` would leave
+    // every exec session already in the cache being called 「中斷」 forever —
+    // the fix would not reach the data it was written for. One re-read of the
+    // whole cache costs the 25 ms this file's docstring already accounts for.
+    if (typeof sessionId === 'string' && typeof cwd === 'string' && typeof isExec === 'boolean') {
+      out[key] = { sessionId, cwd, isExec }
+    }
   }
   return out
 }

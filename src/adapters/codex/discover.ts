@@ -71,7 +71,7 @@ export function discoverCodex(opts: CodexOptions, deps: CodexDeps): CodexResult 
   }
   const files = scanned.files
 
-  const groups = new Map<string, { cwd: string; files: RolloutFile[] }>()
+  const groups = new Map<string, { cwd: string; isExec: boolean; files: RolloutFile[] }>()
   let invalid = 0
   for (const file of files) {
     const meta = deps.meta(file)
@@ -80,7 +80,7 @@ export function discoverCodex(opts: CodexOptions, deps: CodexDeps): CodexResult 
       continue
     }
     const group = groups.get(meta.sessionId)
-    if (group === undefined) groups.set(meta.sessionId, { cwd: meta.cwd, files: [file] })
+    if (group === undefined) groups.set(meta.sessionId, { cwd: meta.cwd, isExec: meta.isExec, files: [file] })
     else group.files.push(file)
   }
 
@@ -94,7 +94,7 @@ export function discoverCodex(opts: CodexOptions, deps: CodexDeps): CodexResult 
     ({ files: group }) => opts.nowMs - newestOf(group).mtimeMs <= CODEX_ABANDON_MS,
   )
   const live = recent ? deps.liveCwds() : new Set<string>()
-  const sessions = [...groups.entries()].flatMap(([sessionId, { cwd, files: group }]) => {
+  const sessions = [...groups.entries()].flatMap(([sessionId, { cwd, isExec, files: group }]) => {
     const newest = newestOf(group)
     const updatedAt = newest.mtimeMs
     // The window was widened above so pinned projects could survive the scan;
@@ -111,6 +111,7 @@ export function discoverCodex(opts: CodexOptions, deps: CodexDeps): CodexResult 
       // rollout is the one that matters — a session spans up to 33 files here,
       // and how an older one ended says nothing about now.
       endedWith: cwdHasProcess ? 'unknown' : deps.ending(newest.path),
+      isExec,
     })
     return [{
       adapterId: CODEX_ADAPTER_ID,

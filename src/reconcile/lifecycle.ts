@@ -163,6 +163,12 @@ export interface CodexLifecycleInput {
   nowMs: number
   /** Defaults to `unknown`, which reproduces the pre-2026-08-14 timer rule. */
   endedWith?: CodexEnding
+  /**
+   * Whether this is a `codex exec` batch run rather than an interactive
+   * session. Defaults to false: not knowing must not be read as "batch", or a
+   * real crash gets talked down to nothing.
+   */
+  isExec?: boolean
 }
 
 /**
@@ -193,6 +199,16 @@ export function decideCodexLifecycle(input: CodexLifecycleInput): LifecycleVerdi
   // Still a debounce, but only for the mid-turn case now: two events in a live
   // session are routinely minutes apart, and `pgrep` can lose a race.
   if (idleMs <= CODEX_ABANDON_MS) return { lifecycle: 'running', confidence: 'low' }
+  // A `codex exec` run that stopped has no breakpoint to recover: it was
+  // launched with its whole prompt as an argument, so getting back to it means
+  // re-running the command, not resuming a session. 「中斷」 in spec §11.1 means
+  // 「有未回收的斷點」, which overstates this.
+  //
+  // Measured 2026-08-14: one such run stopped mid-`reasoning` after 6.5
+  // minutes and put an orange 「1 中斷?」 in the menu bar. The verdict was
+  // factually right and the alarm was still noise — a parent Bash call timing
+  // out or being cancelled makes this routine.
+  if (input.isExec === true) return { lifecycle: 'ended_clean', confidence: 'low' }
   return idleMs > CODEX_UNKNOWN_MS
     ? { lifecycle: 'ended_clean', confidence: 'low' }
     : { lifecycle: 'crashed', confidence: 'low' }

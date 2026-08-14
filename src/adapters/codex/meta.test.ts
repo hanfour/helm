@@ -29,7 +29,7 @@ function rollout(body: string): string {
 }
 
 test('讀出 session id 與 cwd', () => {
-  assert.deepEqual(readMeta(rollout(metaLine())), { sessionId: SID, cwd: CWD })
+  assert.deepEqual(readMeta(rollout(metaLine())), { sessionId: SID, cwd: CWD, isExec: false })
 })
 
 test('session_id 優先於 id —— 兩個都有時以前者為準', () => {
@@ -38,7 +38,7 @@ test('session_id 優先於 id —— 兩個都有時以前者為準', () => {
 })
 
 test('18 KB 的第一行讀得完 —— 真實檔案就是這麼大', () => {
-  assert.deepEqual(readMeta(rollout(metaLine({}, true))), { sessionId: SID, cwd: CWD })
+  assert.deepEqual(readMeta(rollout(metaLine({}, true))), { sessionId: SID, cwd: CWD, isExec: false })
 })
 
 test('只認第一行，後面的內容不影響', () => {
@@ -55,7 +55,7 @@ test('payload 的 14 種形狀都吃得下 —— 只取 id 與 cwd，其餘一�
     { forked_from_id: 'other', agent_path: '/p', multi_agent_version: 2 },
   ]
   for (const extra of shapes) {
-    assert.deepEqual(readMeta(rollout(metaLine(extra))), { sessionId: SID, cwd: CWD }, JSON.stringify(extra))
+    assert.deepEqual(readMeta(rollout(metaLine(extra))), { sessionId: SID, cwd: CWD, isExec: false }, JSON.stringify(extra))
   }
 })
 
@@ -89,21 +89,21 @@ test('快取命中時完全不碰檔案', () => {
     throw new Error('不該讀檔')
   }
   const file = { rolloutId: 'r1', path: '/nope', startedAt: 0, mtimeMs: 0 }
-  assert.deepEqual(resolveMeta(file, cache, () => ({ sessionId: SID, cwd: CWD })), { sessionId: SID, cwd: CWD })
-  assert.deepEqual(resolveMeta(file, cache, boom), { sessionId: SID, cwd: CWD })
+  assert.deepEqual(resolveMeta(file, cache, () => ({ sessionId: SID, cwd: CWD, isExec: false })), { sessionId: SID, cwd: CWD, isExec: false })
+  assert.deepEqual(resolveMeta(file, cache, boom), { sessionId: SID, cwd: CWD, isExec: false })
 })
 
 test('快取寫得出去也讀得回來', () => {
   const path = join(tempDir('helm-codex-'), 'cache.json')
   const cache = loadMetaCache(path)
   const file = { rolloutId: 'r1', path: '/nope', startedAt: 0, mtimeMs: 0 }
-  resolveMeta(file, cache, () => ({ sessionId: SID, cwd: CWD }))
+  resolveMeta(file, cache, () => ({ sessionId: SID, cwd: CWD, isExec: false }))
   cache.flush()
 
   assert.equal(existsSync(path), true)
-  assert.deepEqual(JSON.parse(readFileSync(path, 'utf8'))['r1'], { sessionId: SID, cwd: CWD })
+  assert.deepEqual(JSON.parse(readFileSync(path, 'utf8'))['r1'], { sessionId: SID, cwd: CWD, isExec: false })
   const reloaded = loadMetaCache(path)
-  assert.deepEqual(resolveMeta(file, reloaded, () => { throw new Error('不該讀檔') }), { sessionId: SID, cwd: CWD })
+  assert.deepEqual(resolveMeta(file, reloaded, () => { throw new Error('不該讀檔') }), { sessionId: SID, cwd: CWD, isExec: false })
 })
 
 test('快取檔壞掉時當空的，不讓整個看板掛掉', () => {
@@ -113,8 +113,8 @@ test('快取檔壞掉時當空的，不讓整個看板掛掉', () => {
     const cache = loadMetaCache(path)
     const file = { rolloutId: 'r1', path: '/nope', startedAt: 0, mtimeMs: 0 }
     assert.deepEqual(
-      resolveMeta(file, cache, () => ({ sessionId: SID, cwd: CWD })),
-      { sessionId: SID, cwd: CWD },
+      resolveMeta(file, cache, () => ({ sessionId: SID, cwd: CWD, isExec: false })),
+      { sessionId: SID, cwd: CWD, isExec: false },
       junk,
     )
   }
@@ -143,17 +143,17 @@ test('讀不到的檔案會被重試，不是永久記住 —— 剛建好的 ro
   assert.equal(resolveMeta(file, cache, failing), null)
   assert.equal(reads, 2, '失敗要重試')
 
-  const good = () => ({ sessionId: SID, cwd: CWD })
-  assert.deepEqual(resolveMeta(file, cache, good), { sessionId: SID, cwd: CWD }, '寫完之後讀得到')
+  const good = () => ({ sessionId: SID, cwd: CWD, isExec: false })
+  assert.deepEqual(resolveMeta(file, cache, good), { sessionId: SID, cwd: CWD, isExec: false }, '寫完之後讀得到')
 })
 
 test('成功讀到的仍然只讀一次 —— 那才是快取存在的理由', () => {
   const cache = loadMetaCache(join(tempDir('helm-codex-'), 'cache.json'))
   const file = { rolloutId: 'r1', path: '/nope', startedAt: 0, mtimeMs: 0 }
-  resolveMeta(file, cache, () => ({ sessionId: SID, cwd: CWD }))
+  resolveMeta(file, cache, () => ({ sessionId: SID, cwd: CWD, isExec: false }))
   assert.deepEqual(
     resolveMeta(file, cache, () => { throw new Error('不該讀檔') }),
-    { sessionId: SID, cwd: CWD },
+    { sessionId: SID, cwd: CWD, isExec: false },
   )
 })
 
@@ -165,4 +165,31 @@ test('第一行不是 session_meta 就拒絕，即使它帶著 id 與 cwd', () =
     payload: { id: SID, cwd: CWD },
   })}\n`
   assert.equal(readMeta(rollout(body)), null)
+})
+
+test('從 originator 認出 codex exec', () => {
+  const path = rollout(metaLine({ originator: 'codex_exec' }))
+  assert.equal(readMeta(path)?.isExec, true)
+})
+
+test('互動式 session 不是 exec', () => {
+  const path = rollout(metaLine({ originator: 'codex-tui' }))
+  assert.equal(readMeta(path)?.isExec, false)
+})
+
+test('originator 缺少或不是字串時當成不是 exec', () => {
+  // meta.ts 自己的註解記著 payload 有 14 種形狀，只有 session_id 與 cwd
+  // 在全部 14 種裡都有。originator 在本機 196 個 rollout 裡都在，但未來
+  // 版本可能拿掉。猜成 exec 的方向會把真的中斷講成沒事。
+  assert.equal(readMeta(rollout(metaLine({ originator: undefined })))?.isExec, false)
+  assert.equal(readMeta(rollout(metaLine({ originator: { kind: 'exec' } })))?.isExec, false)
+})
+
+test('舊快取沒有 isExec 欄位時整筆丟掉重讀，不預設成 false', () => {
+  // 預設 false 的話，升級前就在快取裡的 exec session 會一直被當成互動式，
+  // 也就是一直被叫做中斷 —— 修正對既有資料不生效。
+  const file = join(tempDir('helm-meta-isexec'), 'codex-meta.json')
+  // 刻意不帶 isExec：這就是舊版 helm 寫出來的形狀。
+  writeFileSync(file, JSON.stringify({ r1: { sessionId: SID, cwd: CWD } }))
+  assert.equal(loadMetaCache(file).get('r1'), undefined)
 })

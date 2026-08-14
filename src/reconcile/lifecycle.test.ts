@@ -271,3 +271,51 @@ test('Codex 的信心一律低 —— 全部是從行程表與檔案推論出來
     assert.equal(v.confidence, 'low', endedWith)
   }
 })
+
+test('Codex：被中止的 exec 不叫中斷 —— 批次執行沒有斷點可回收', () => {
+  // 實測 2026-08-14：一個 codex exec 跑了 6.5 分鐘、停在 reasoning 中途、
+  // 行程沒了，helm 亮起橘色「1 中斷?」。事實判定是對的，但「中斷」在
+  // 規格 §11.1 的意思是「有未回收的斷點」，而 exec 是一次性批次執行，
+  // 要的話是重跑那道指令，不是 resume 它。
+  //
+  // 上層的 Bash 逾時或取消會讓這件事反覆發生，所以每次都亮警報是雜訊。
+  const v = decideCodexLifecycle({
+    cwdHasProcess: false, lastEventMs: DAY - 43 * 60_000, nowMs: DAY,
+    endedWith: 'midflight', isExec: true,
+  })
+  assert.equal(v.lifecycle, 'ended_clean')
+  assert.equal(v.confidence, 'low', '仍然是推論，不是 Codex 說的')
+})
+
+test('Codex：互動式 session 停在半途照樣算中斷', () => {
+  const v = decideCodexLifecycle({
+    cwdHasProcess: false, lastEventMs: DAY - 43 * 60_000, nowMs: DAY,
+    endedWith: 'midflight', isExec: false,
+  })
+  assert.equal(v.lifecycle, 'crashed')
+})
+
+test('Codex：exec 有行程在跑時就是在跑', () => {
+  const v = decideCodexLifecycle({
+    cwdHasProcess: true, lastEventMs: 0, nowMs: DAY, endedWith: 'midflight', isExec: true,
+  })
+  assert.equal(v.lifecycle, 'running')
+})
+
+test('Codex：exec 的 30 分鐘防抖動仍然有效', () => {
+  // 剛停 10 分鐘可能只是 pgrep 沒抓到，不該立刻宣告它結束了。
+  const v = decideCodexLifecycle({
+    cwdHasProcess: false, lastEventMs: DAY - 10 * 60_000, nowMs: DAY,
+    endedWith: 'midflight', isExec: true,
+  })
+  assert.equal(v.lifecycle, 'running')
+})
+
+test('Codex：不知道是不是 exec 時，維持原本的保守判定', () => {
+  // isExec 沒傳（舊快取、或 originator 欄位在未來版本消失）時不能猜成 exec，
+  // 那個方向會把真的中斷講成沒事。
+  const v = decideCodexLifecycle({
+    cwdHasProcess: false, lastEventMs: DAY - 43 * 60_000, nowMs: DAY, endedWith: 'midflight',
+  })
+  assert.equal(v.lifecycle, 'crashed')
+})

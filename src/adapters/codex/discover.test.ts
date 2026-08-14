@@ -19,7 +19,7 @@ const file = (over: Partial<RolloutFile> & { rolloutId: string }): RolloutFile =
 const asked: { dir?: string; sinceMs?: number } = {}
 
 function deps(over: Partial<CodexDeps> = {}): CodexDeps {
-  const metas: Record<string, RolloutMeta> = { r1: { sessionId: SID, cwd: '/p/a' } }
+  const metas: Record<string, RolloutMeta> = { r1: { sessionId: SID, cwd: '/p/a', isExec: false } }
   return {
     scan: (dir, sinceMs) => {
       asked.dir = dir
@@ -56,7 +56,7 @@ test('同一個 session 的多個 rollout 合併成一行', () => {
   ]
   const { sessions } = run({
     scan: () => ({ files, unreadable: [] }),
-    meta: () => ({ sessionId: SID, cwd: '/p/a' }),
+    meta: () => ({ sessionId: SID, cwd: '/p/a', isExec: false }),
   })
   assert.equal(sessions.length, 1, '三個檔案是同一個 session')
   const s = sessions[0]
@@ -69,7 +69,7 @@ test('同一個 session 的多個 rollout 合併成一行', () => {
 test('不同 session 各自成行', () => {
   const { sessions } = run({
     scan: () => ({ files: [file({ rolloutId: 'r1' }), file({ rolloutId: 'r2' })], unreadable: [] }),
-    meta: (f) => ({ sessionId: f.rolloutId === 'r1' ? SID : OTHER, cwd: '/p/a' }),
+    meta: (f) => ({ sessionId: f.rolloutId === 'r1' ? SID : OTHER, cwd: '/p/a', isExec: false }),
   })
   assert.equal(sessions.length, 2)
 })
@@ -88,7 +88,7 @@ test('pid 一律 null —— Codex 沒有 PID 註冊表', () => {
 test('讀不出 meta 的檔案計入 invalid，不是靜默消失', () => {
   const { sessions, invalid } = run({
     scan: () => ({ files: [file({ rolloutId: 'r1' }), file({ rolloutId: 'bad' })], unreadable: [] }),
-    meta: (f) => (f.rolloutId === 'bad' ? null : { sessionId: SID, cwd: '/p/a' }),
+    meta: (f) => (f.rolloutId === 'bad' ? null : { sessionId: SID, cwd: '/p/a', isExec: false }),
   })
   assert.equal(sessions.length, 1)
   assert.equal(invalid, 1, '看板要說得出「有一筆讀不到」')
@@ -254,11 +254,29 @@ test('讀檔尾讀的是最新的那個 rollout，不是隨便一個', () => {
       ],
       unreadable: [],
     }),
-    meta: () => ({ sessionId: SID, cwd: '/p/a' }),
+    meta: () => ({ sessionId: SID, cwd: '/p/a', isExec: false }),
     ending: (p) => {
       asked.push(p)
       return 'finished'
     },
   })
   assert.deepEqual(asked, ['/r/new.jsonl'], asked.join(','))
+})
+
+test('被中止的 exec session 不會被判成中斷', () => {
+  const { sessions } = run({
+    scan: () => ({ files: [file({ rolloutId: 'r1', mtimeMs: NOW - 43 * 60_000 })], unreadable: [] }),
+    meta: () => ({ sessionId: SID, cwd: '/p/a', isExec: true }),
+    ending: () => 'midflight',
+  })
+  assert.equal(sessions[0]?.lifecycle, 'ended_clean')
+})
+
+test('互動式的 session 停在半途照樣是中斷', () => {
+  const { sessions } = run({
+    scan: () => ({ files: [file({ rolloutId: 'r1', mtimeMs: NOW - 43 * 60_000 })], unreadable: [] }),
+    meta: () => ({ sessionId: SID, cwd: '/p/a', isExec: false }),
+    ending: () => 'midflight',
+  })
+  assert.equal(sessions[0]?.lifecycle, 'crashed')
 })
