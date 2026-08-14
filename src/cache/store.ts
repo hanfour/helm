@@ -129,7 +129,11 @@ function quarantine(cacheFile: string): void {
 export function writeCache(cacheFile: string, cache: CacheShape): void {
   mkdirSync(dirname(cacheFile), { recursive: true })
   const temp = `${cacheFile}.${process.pid}.tmp`
-  writeFileSync(temp, `${JSON.stringify(cache, null, 2)}\n`, 'utf8')
+  // 0600, like every other file helm puts in ~/.helm: this one holds briefs —
+  // goals, blockers and absolute paths into whatever the user was working on —
+  // and ~/.helm is world-readable. It was the oldest of these caches and the
+  // only one the 0644 sweep missed.
+  writeFileSync(temp, `${JSON.stringify(cache, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
   renameSync(temp, cacheFile)
 }
 

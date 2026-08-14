@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { readPrefs, writePrefs, setProjectPref } from './prefs.ts'
@@ -126,4 +126,11 @@ test('第二次毀損不會蓋掉第一次隔離的證據', () => {
   const bodies = quarantined.map((n) => readFileSync(join(dir, n), 'utf8'))
   assert.ok(bodies.includes('{第一次壞掉'))
   assert.ok(bodies.includes('{第二次壞掉'))
+})
+
+test('偏好檔以 0600 寫出 —— 它列的是這台機器上的專案路徑', () => {
+  const dir = tempDir('helm-prefs-mode')
+  const file = join(dir, 'projects.json')
+  writePrefs(file, { version: 1, projects: {} })
+  assert.equal(statSync(file).mode & 0o777, 0o600)
 })

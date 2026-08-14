@@ -86,7 +86,9 @@ export function quarantinePath(prefsFile: string): string {
 export function writePrefs(prefsFile: string, prefs: PrefsFile): void {
   mkdirSync(dirname(prefsFile), { recursive: true })
   const temp = `${prefsFile}.${process.pid}.tmp`
-  writeFileSync(temp, `${JSON.stringify(prefs, null, 2)}\n`, 'utf8')
+  // 0600 like the rest of ~/.helm: this is a list of every project path on
+  // the machine, including private clients' directory names.
+  writeFileSync(temp, `${JSON.stringify(prefs, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
   renameSync(temp, prefsFile)
 }
 

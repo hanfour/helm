@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, existsSync, readFileSync, readdirSync } from 'node:fs'
+import { mkdtempSync, statSync, writeFileSync, existsSync, readFileSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
@@ -114,4 +114,14 @@ test('寫入是原子的 —— 中途失敗不會留下半份檔案', () => {
   const leftovers = readdirSync(dirname(f)).filter((n: string) => n.includes('.tmp'))
   assert.deepEqual(leftovers, [])
   assert.deepEqual(readCache(f).briefs['s1']?.body, BRIEF)
+})
+
+test('快取檔以 0600 寫出 —— 裡面是 brief，不是公開資訊', () => {
+  // ~/.helm/cache.json 裝的是目標、卡點與完整檔案路徑，而 ~/.helm 是
+  // 全世界可讀的。旁邊的 prs.json 與 codex-meta.json 都是 0600 —— 那是
+  // 之前 review 抓到 0644 才改的，這個最舊也最敏感的反而漏掉了。
+  const dir = tempDir('helm-store-mode')
+  const file = join(dir, 'cache.json')
+  writeCache(file, EMPTY_CACHE)
+  assert.equal(statSync(file).mode & 0o777, 0o600, '快取檔不該是全世界可讀')
 })

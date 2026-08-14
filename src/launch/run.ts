@@ -23,7 +23,9 @@ export function briefPathFor(briefsDir: string, sessionId: string): string {
 
 export function writeBriefFile(path: string, markdown: string): void {
   mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(path, markdown, 'utf8')
+  // 0600: the whole handover — what the session was doing, what is blocked,
+  // which files it touched. The richest single artefact helm produces.
+  writeFileSync(path, markdown, { encoding: 'utf8', mode: 0o600 })
 }
 
 /**

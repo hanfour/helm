@@ -97,7 +97,10 @@ function trim(value, max) {
 function writeAtomic(path, body, errorsLog) {
   const temp = `${path}.${process.pid}.tmp`
   try {
-    writeFileSync(temp, body, 'utf8')
+    // 0600. The marker's `summary` is the command being run, verbatim — a
+    // curl carrying a token, a path under a private client's directory — and
+    // it is rewritten on every tool call into a world-readable ~/.helm.
+    writeFileSync(temp, body, { encoding: 'utf8', mode: 0o600 })
     renameSync(temp, path)
   } catch (err) {
     cleanup(temp)

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { briefPathFor, defaultDeps, openSession, writeBriefFile } from './run.ts'
@@ -67,4 +67,11 @@ test('真的執行 osascript —— 用不碰任何應用程式的腳本，不�
 
 test('osascript 失敗時會拋錯，讓 helm open 的錯誤處理接得到', () => {
   assert.throws(() => defaultDeps().runOsascript('這不是 AppleScript ((('))
+})
+
+test('簡報檔以 0600 寫出 —— 那是完整的交接內容', () => {
+  const dir = tempDir('helm-brief-mode')
+  const file = briefPathFor(dir, 'abc123')
+  writeBriefFile(file, '# 交接簡報\n')
+  assert.equal(statSync(file).mode & 0o777, 0o600)
 })
